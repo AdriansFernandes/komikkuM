@@ -513,6 +513,10 @@ class MangaRestorer(
         mergeMangaId: Long,
         backupMergedMangaReferences: List<BackupMergedMangaReference>,
     ) {
+        // KMK -->
+        if (backupMergedMangaReferences.isEmpty()) return
+        // KMK <--
+
         // Get merged manga references from file and from db
         val dbMergedMangaReferences = handler.awaitList {
             mergedQueries.selectAll(MergedMangaMapper::map)
@@ -524,27 +528,35 @@ class MangaRestorer(
             .map { EXHMigrations.migrateBackupMergedMangaReference(it) }
             // KMK <--
             .forEach { backupMergedMangaReference ->
+                // KMK -->
+                val mergedManga = handler.awaitList {
+                    mangasQueries.getMangaByUrlAndSource(
+                        backupMergedMangaReference.mangaUrl,
+                        backupMergedMangaReference.mangaSourceId,
+                        MangaMapper::mapManga,
+                    )
+                }.firstOrNull() ?: return@forEach
+
+                if (mergedManga.id != mergeMangaId &&
+                    mergedManga.source != MERGED_SOURCE_ID &&
+                    mergedManga.favorite
+                ) {
+                    updateManga.awaitUpdateFavorite(mergedManga.id, false)
+                }
+                // KMK <--
+
                 // If the backupMergedMangaReference isn't in the db,
                 // remove the id and insert a new backupMergedMangaReference
                 // Store the inserted id in the backupMergedMangaReference
                 if (dbMergedMangaReferences.none {
                         backupMergedMangaReference.mergeUrl == it.mergeUrl &&
-                            backupMergedMangaReference.mangaUrl == it.mangaUrl
+                            backupMergedMangaReference.mangaUrl == it.mangaUrl &&
+                            // KMK -->
+                            backupMergedMangaReference.mangaSourceId == it.mangaSourceId
+                        // KMK <--
                     }
                 ) {
                     // Let the db assign the id
-                    // KMK -->
-                    val mergedManga = handler.awaitList {
-                        // KMK <--
-                        mangasQueries.getMangaByUrlAndSource(
-                            backupMergedMangaReference.mangaUrl,
-                            backupMergedMangaReference.mangaSourceId,
-                            MangaMapper::mapManga,
-                        )
-                        // KMK -->
-                    }.firstOrNull()
-                        // KMK <--
-                        ?: return@forEach
                     backupMergedMangaReference.getMergedMangaReference().run {
                         handler.await {
                             mergedQueries.insert(

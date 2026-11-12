@@ -94,7 +94,13 @@ class BackupCreator(
             val mergedManga = getMergedManga.await()
             // SY <--
             val backupManga =
-                backupMangas(getFavorites.await() + nonFavoriteManga /* SY --> */ + mergedManga /* SY <-- */, options)
+                // KMK -->
+                backupMangas(
+                    (getFavorites.await() + nonFavoriteManga /* SY --> */ + mergedManga /* SY <-- */)
+                        .distinctBy { it.id },
+                    options,
+                )
+            // KMK <--
 
             val backup = Backup(
                 backupManga = backupManga,
