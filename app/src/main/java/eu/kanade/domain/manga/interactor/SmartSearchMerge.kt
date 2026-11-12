@@ -3,14 +3,11 @@ package eu.kanade.domain.manga.interactor
 import android.app.Application
 import eu.kanade.domain.manga.model.copyFrom
 import eu.kanade.domain.manga.model.toSManga
-import eu.kanade.tachiyomi.source.online.all.MergedSource
 import exh.source.MERGED_SOURCE_ID
 import tachiyomi.core.common.i18n.stringResource
-import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.core.common.util.lang.withNonCancellableContext
 import tachiyomi.domain.category.interactor.GetCategories
 import tachiyomi.domain.category.interactor.SetMangaCategories
-import tachiyomi.domain.chapter.interactor.GetChaptersByMangaId
 import tachiyomi.domain.manga.interactor.DeleteByMergeId
 import tachiyomi.domain.manga.interactor.DeleteMangaById
 import tachiyomi.domain.manga.interactor.GetManga
@@ -22,7 +19,6 @@ import tachiyomi.domain.manga.model.Manga
 import tachiyomi.domain.manga.model.MangaUpdate
 import tachiyomi.domain.manga.model.MergeMangaSettingsUpdate
 import tachiyomi.domain.manga.model.MergedMangaReference
-import tachiyomi.domain.source.service.SourceManager
 import tachiyomi.i18n.sy.SYMR
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -39,8 +35,6 @@ class SmartSearchMerge(
     // KMK -->
     private val updateManga: UpdateManga = Injekt.get(),
     private val updateMergedSettings: UpdateMergedSettings = Injekt.get(),
-    private val getChaptersByMangaId: GetChaptersByMangaId = Injekt.get(),
-    private val sourceManager: SourceManager = Injekt.get(),
     // KMK <--
 ) {
     /**
@@ -192,6 +186,51 @@ class SmartSearchMerge(
     }
 
     // KMK -->
+    data class BatchIntegrationGroup(
+        val mangasToMerge: List<Manga>,
+        val infoMangaId: Long? = null,
+    )
+
+    /**
+     * Integrates multiple groups of mangas in a single fast batch, deferring the Library
+     * favorite visibility updates (`MangaUpdate`) to a single `updateManga.awaitAll` call at the end
+     * so the Library UI does not re-query and freeze on every intermediate step.
+     */
+    suspend fun integrateMangaGroupsBatch(
+        groups: List<BatchIntegrationGroup>,
+        hideChildrenFromLibrary: Boolean = true,
+        onProgress: (completed: Int, total: Int, currentTitle: String) -> Unit = { _, _, _ -> },
+    ): List<Manga> {
+        if (groups.isEmpty()) return emptyList()
+        val mergedResults = mutableListOf<Manga>()
+        val pendingMangaUpdates = LinkedHashMap<Long, MangaUpdate>()
+
+        for ((index, group) in groups.withIndex()) {
+            val distinctMangas = group.mangasToMerge.distinctBy { it.id }
+            if (distinctMangas.size < 2) continue
+
+            val primaryTitle = distinctMangas.find { it.id == group.infoMangaId }?.title
+                ?: distinctMangas.first().title
+            onProgress(index + 1, groups.size, primaryTitle)
+
+            val result = integrateSingleGroupInternal(
+                distinctMangas = distinctMangas,
+                infoMangaId = group.infoMangaId,
+                hideChildrenFromLibrary = hideChildrenFromLibrary,
+                deferredMangaUpdates = pendingMangaUpdates,
+            )
+            if (result != null) {
+                mergedResults.add(result)
+            }
+        }
+
+        if (pendingMangaUpdates.isNotEmpty()) {
+            updateManga.awaitAll(pendingMangaUpdates.values.toList())
+        }
+
+        return mergedResults
+    }
+
     /**
      * Integrates multiple manga entries (e.g. PT-BR and EN-US versions) into a single unified
      * [MERGED_SOURCE_ID] entry, optionally hiding individual child entries from the Library so
@@ -205,18 +244,112 @@ class SmartSearchMerge(
         val distinctMangas = mangasToMerge.distinctBy { it.id }
         if (distinctMangas.size <= 1) return distinctMangas.firstOrNull()
 
+        val pendingUpdates = LinkedHashMap<Long, MangaUpdate>()
+        val merged = integrateSingleGroupInternal(
+            distinctMangas = distinctMangas,
+            infoMangaId = infoMangaId,
+            hideChildrenFromLibrary = hideChildrenFromLibrary,
+            deferredMangaUpdates = pendingUpdates,
+        )
+        if (pendingUpdates.isNotEmpty()) {
+            updateManga.awaitAll(pendingUpdates.values.toList())
+        }
+        return merged
+    }
+
+    private suspend fun integrateSingleGroupInternal(
+        distinctMangas: List<Manga>,
+        infoMangaId: Long?,
+        hideChildrenFromLibrary: Boolean,
+        deferredMangaUpdates: MutableMap<Long, MangaUpdate>,
+    ): Manga? {
         val existingMerged = distinctMangas.firstOrNull { it.source == MERGED_SOURCE_ID }
         val nonMerged = distinctMangas.filterNot { it.source == MERGED_SOURCE_ID }
             .sortedByDescending { it.id == infoMangaId }
-        val ordered = listOfNotNull(existingMerged) + nonMerged
-        if (ordered.size <= 1) return ordered.firstOrNull()
 
-        var mergedManga = ordered.first()
-        for (manga in ordered.drop(1)) {
-            mergedManga = smartSearchMerge(manga, mergedManga.id)
+        val targetInfoManga = nonMerged.firstOrNull() ?: existingMerged ?: return null
+
+        val mergedManga: Manga = if (existingMerged != null) {
+            existingMerged
+        } else {
+            var candidate = Manga.create()
+                .copy(
+                    url = targetInfoManga.url,
+                    ogTitle = targetInfoManga.title,
+                    source = MERGED_SOURCE_ID,
+                )
+                .copyFrom(targetInfoManga.toSManga())
+                .copy(
+                    favorite = true,
+                    lastUpdate = targetInfoManga.lastUpdate,
+                    viewerFlags = targetInfoManga.viewerFlags,
+                    chapterFlags = targetInfoManga.chapterFlags,
+                    dateAdded = System.currentTimeMillis(),
+                )
+
+            var existingInDb = getManga.await(candidate.url, candidate.source)
+            while (existingInDb != null) {
+                if (existingInDb.favorite) {
+                    candidate = existingInDb
+                    break
+                } else {
+                    withNonCancellableContext {
+                        existingInDb?.id?.let {
+                            deleteByMergeId.await(it)
+                            deleteMangaById.await(it)
+                        }
+                    }
+                }
+                existingInDb = getManga.await(candidate.url, candidate.source)
+            }
+            networkToLocalManga(candidate)
         }
 
-        // Union all categories from all integrated mangas into the merged manga
+        val existingRefs = getMergedReferencesById.await(mergedManga.id)
+        val newReferences = mutableListOf<MergedMangaReference>()
+
+        if (existingRefs.none { it.mangaSourceId == MERGED_SOURCE_ID }) {
+            newReferences += MergedMangaReference(
+                id = -1,
+                isInfoManga = false,
+                getChapterUpdates = false,
+                chapterSortMode = 0,
+                chapterPriority = -1,
+                downloadChapters = false,
+                mergeId = mergedManga.id,
+                mergeUrl = mergedManga.url,
+                mangaId = mergedManga.id,
+                mangaUrl = mergedManga.url,
+                mangaSourceId = MERGED_SOURCE_ID,
+            )
+        }
+
+        for (child in nonMerged) {
+            val alreadyLinked = existingRefs.any {
+                it.mangaId == child.id || (it.mangaSourceId == child.source && it.mangaUrl == child.url)
+            }
+            if (!alreadyLinked) {
+                newReferences += MergedMangaReference(
+                    id = -1,
+                    isInfoManga = child.id == targetInfoManga.id && existingRefs.none { it.isInfoManga },
+                    getChapterUpdates = true,
+                    chapterSortMode = 0,
+                    chapterPriority = 0,
+                    downloadChapters = true,
+                    mergeId = mergedManga.id,
+                    mergeUrl = mergedManga.url,
+                    mangaId = child.id,
+                    mangaUrl = child.url,
+                    mangaSourceId = child.source,
+                )
+            }
+        }
+
+        if (newReferences.isNotEmpty()) {
+            insertMergedReference.awaitAll(newReferences)
+        }
+
+        // Union all categories in one single call
         val allCategoryIds = distinctMangas
             .flatMap { getCategories.await(it.id) }
             .map { it.id }
@@ -225,78 +358,49 @@ class SmartSearchMerge(
             setMangaCategories.await(mergedManga.id, allCategoryIds)
         }
 
-        val references = getMergedReferencesById.await(mergedManga.id)
-        if (infoMangaId != null) {
-            val targetInfoManga = getManga.await(infoMangaId)
-            if (targetInfoManga != null && targetInfoManga.source != MERGED_SOURCE_ID) {
-                val settingsUpdates = references.map { ref ->
-                    MergeMangaSettingsUpdate(
-                        id = ref.id,
-                        isInfoManga = ref.mangaId == infoMangaId,
-                        getChapterUpdates = ref.getChapterUpdates,
-                        chapterPriority = ref.chapterPriority,
-                        downloadChapters = ref.downloadChapters,
-                        chapterSortMode = ref.chapterSortMode,
-                    )
-                }
-                updateMergedSettings.awaitAll(settingsUpdates)
-                updateManga.await(
-                    MangaUpdate(
-                        id = mergedManga.id,
-                        title = targetInfoManga.title,
-                        thumbnailUrl = targetInfoManga.thumbnailUrl,
-                        author = targetInfoManga.author,
-                        artist = targetInfoManga.artist,
-                        description = targetInfoManga.description,
-                        genre = targetInfoManga.genre,
-                        status = targetInfoManga.status,
-                        favorite = true,
-                    ),
+        val allRefs = if (existingRefs.isNotEmpty() && infoMangaId != null) {
+            val refs = getMergedReferencesById.await(mergedManga.id)
+            val settingsUpdates = refs.map { ref ->
+                MergeMangaSettingsUpdate(
+                    id = ref.id,
+                    isInfoManga = ref.mangaId == targetInfoManga.id,
+                    getChapterUpdates = ref.getChapterUpdates,
+                    chapterPriority = ref.chapterPriority,
+                    downloadChapters = ref.downloadChapters,
+                    chapterSortMode = ref.chapterSortMode,
                 )
             }
+            updateMergedSettings.awaitAll(settingsUpdates)
+            refs
+        } else {
+            existingRefs
         }
 
         if (hideChildrenFromLibrary) {
-            val childIds = references
-                .filter { it.mangaSourceId != MERGED_SOURCE_ID && it.mangaId != mergedManga.id }
-                .mapNotNull { it.mangaId }
+            val childIds = (nonMerged.map { it.id } + allRefs.mapNotNull { it.mangaId })
+                .filter { it != mergedManga.id && it > 0 }
                 .distinct()
-            if (childIds.isNotEmpty()) {
-                updateManga.awaitAll(
-                    childIds.map { childId ->
-                        MangaUpdate(
-                            id = childId,
-                            favorite = false,
-                        )
-                    },
+            for (childId in childIds) {
+                deferredMangaUpdates[childId] = MangaUpdate(
+                    id = childId,
+                    favorite = false,
                 )
             }
-            updateManga.await(
-                MangaUpdate(
-                    id = mergedManga.id,
-                    favorite = true,
-                ),
-            )
         }
 
-        val finalMerged = getManga.await(mergedManga.id) ?: mergedManga
+        deferredMangaUpdates[mergedManga.id] = MangaUpdate(
+            id = mergedManga.id,
+            title = targetInfoManga.title.takeIf { existingMerged != null },
+            thumbnailUrl = targetInfoManga.thumbnailUrl.takeIf { existingMerged != null },
+            author = targetInfoManga.author.takeIf { existingMerged != null },
+            artist = targetInfoManga.artist.takeIf { existingMerged != null },
+            description = targetInfoManga.description.takeIf { existingMerged != null },
+            genre = targetInfoManga.genre.takeIf { existingMerged != null },
+            status = targetInfoManga.status.takeIf { existingMerged != null },
+            favorite = true,
+        )
 
-        // Ensure chapters are fetched in the background if any child manga has no chapters yet
-        launchIO {
-            try {
-                val childIds = references
-                    .filter { it.mangaSourceId != MERGED_SOURCE_ID && it.mangaId != finalMerged.id }
-                    .mapNotNull { it.mangaId }
-                val needsSync = childIds.any { getChaptersByMangaId.await(it).isEmpty() }
-                if (needsSync) {
-                    val mergedSource = sourceManager.get(MERGED_SOURCE_ID) as? MergedSource
-                    mergedSource?.fetchChaptersAndSync(finalMerged, downloadChapters = false)
-                }
-            } catch (_: Exception) {
-            }
-        }
-
-        return finalMerged
+        return mergedManga
     }
     // KMK <--
 }

@@ -178,8 +178,12 @@ class FindCrossLanguageMangaMatches(
             onProgress(0, total, mangasToScan.first().title, currentGroups)
 
             if (includeRemoteLookup) {
-                var processedCount = 0
-                for (chunk in mangasToScan.chunked(4)) {
+                val alreadyGroupedIds = currentGroups.flatten().map { it.id }.toHashSet()
+                val candidatesForRemote = mangasToScan.filterNot { it.id in alreadyGroupedIds }
+                val remoteTotal = candidatesForRemote.size
+                var processedCount = total - remoteTotal
+
+                for (chunk in candidatesForRemote.chunked(6)) {
                     if (shouldStop()) break
                     coroutineScope {
                         chunk.map { manga ->
@@ -281,7 +285,7 @@ class FindCrossLanguageMangaMatches(
         val cacheKey = cleanQuery.lowercase()
         remoteSynonymsCache[cacheKey]?.let { return it }
 
-        val discovered = withTimeoutOrNull(3500L) {
+        val discovered = withTimeoutOrNull(2200L) {
             coroutineScope {
                 val anilistDeferred = async { queryAniListSynonyms(cleanQuery) }
                 val mangaDexDeferred = async { queryMangaDexAltTitles(cleanQuery) }
@@ -412,17 +416,21 @@ class FindCrossLanguageMangaMatches(
         sameAuthor: Boolean,
     ): Boolean {
         if (titlesA.isEmpty() || titlesB.isEmpty()) return false
+        if (titlesA.any { it in titlesB }) return true
+
+        val minSimilarity = if (sameAuthor) 0.55 else 0.80
         for (a in titlesA) {
             for (b in titlesB) {
-                if (a == b) return true
                 val minLen = minOf(a.length, b.length)
                 val maxLen = maxOf(a.length, b.length)
-                if (minLen >= 6 && maxLen > 0 && minLen.toDouble() / maxLen.toDouble() >= 0.65) {
+                if (maxLen == 0) continue
+                val lenRatio = minLen.toDouble() / maxLen.toDouble()
+                if (minLen >= 6 && lenRatio >= 0.65) {
                     if (a.contains(b) || b.contains(a)) return true
                 }
+                if (lenRatio < minSimilarity) continue
                 val similarity = levenshtein.similarity(a, b)
-                if (similarity >= 0.80) return true
-                if (sameAuthor && similarity >= 0.55) return true
+                if (similarity >= minSimilarity) return true
             }
         }
         return false
