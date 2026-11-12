@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,8 +62,10 @@ import eu.kanade.presentation.components.TabbedDialogPaddings
 import eu.kanade.presentation.manga.components.MangaCover
 import eu.kanade.presentation.more.settings.LocalPreferenceMinHeight
 import eu.kanade.tachiyomi.util.system.LocaleHelper
+import eu.kanade.tachiyomi.util.system.toast
 import exh.source.MERGED_SOURCE_ID
 import kotlinx.coroutines.launch
+import tachiyomi.core.common.i18n.stringResource
 import tachiyomi.core.common.util.lang.withIOContext
 import tachiyomi.domain.manga.interactor.GetLibraryManga
 import tachiyomi.domain.manga.interactor.GetMergedMangaById
@@ -69,6 +73,7 @@ import tachiyomi.domain.manga.model.Manga
 import tachiyomi.domain.source.service.SourceManager
 import tachiyomi.i18n.MR
 import tachiyomi.i18n.kmk.KMR
+import tachiyomi.i18n.sy.SYMR
 import tachiyomi.presentation.core.components.material.padding
 import tachiyomi.presentation.core.i18n.stringResource
 import tachiyomi.presentation.core.icons.FlagEmoji
@@ -77,6 +82,8 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 // KMK -->
+private fun groupKeyOf(group: List<Manga>): Long = group.firstOrNull()?.id ?: -1L
+
 /**
  * High-performance Preview, Batch Suggestion & Confirmation sheet for integrating manga entries
  * across languages (e.g., PT-BR, EN-US, Japanese) into unified Library banners.
@@ -95,6 +102,7 @@ fun MangaIntegrationPreviewDialog(
     scanLibrary: Boolean = false,
     onEmptyScanResult: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
     val sourceManager = remember { Injekt.get<SourceManager>() }
     val getLibraryManga = remember { Injekt.get<GetLibraryManga>() }
     val getMergedMangaById = remember { Injekt.get<GetMergedMangaById>() }
@@ -166,7 +174,7 @@ fun MangaIntegrationPreviewDialog(
         }
     }
 
-    val activeGroups = remember(
+    val allRawGroups = remember(
         discoveredGroups,
         autoDetectedSelectionGroups,
         useAutoGroupsForSelection,
@@ -180,23 +188,37 @@ fun MangaIntegrationPreviewDialog(
         }
     }
 
-    val groupCheckedMap = remember(activeGroups) {
-        mutableStateMapOf<Int, Boolean>().apply {
-            activeGroups.indices.forEach { put(it, true) }
-        }
+    // Track groups already integrated during this session so we can stay in the list 1 by 1
+    val integratedGroupKeys = remember { mutableStateMapOf<Long, Boolean>() }
+
+    val activeGroups = remember(allRawGroups, integratedGroupKeys.size) {
+        allRawGroups.filterNot { integratedGroupKeys[groupKeyOf(it)] == true }
     }
-    val mangaCheckedMap = remember(activeGroups) {
-        mutableStateMapOf<Long, Boolean>().apply {
-            activeGroups.flatten().forEach { put(it.id, true) }
-        }
-    }
-    val primaryMangaPerGroup = remember(activeGroups) {
-        mutableStateMapOf<Int, Long>().apply {
-            activeGroups.forEachIndexed { idx, group ->
-                val defaultPrimary = group.firstOrNull { it.source != MERGED_SOURCE_ID }?.id
+
+    val isGeneralListMode = scanLibrary || candidateGroups.size > 1 || allRawGroups.size > 1
+
+    // Stable maps keyed by groupKey (Long) and mangaId (Long) so removing 1 group never shifts other groups
+    val groupCheckedMap = remember { mutableStateMapOf<Long, Boolean>() }
+    val mangaCheckedMap = remember { mutableStateMapOf<Long, Boolean>() }
+    val primaryMangaPerGroup = remember { mutableStateMapOf<Long, Long>() }
+
+    LaunchedEffect(allRawGroups, isGeneralListMode) {
+        for (group in allRawGroups) {
+            val gKey = groupKeyOf(group)
+            if (!groupCheckedMap.containsKey(gKey)) {
+                // In the general integration list, groups start UNSELECTED by default.
+                // Only in single manual pair mode does the 1 group start selected.
+                groupCheckedMap[gKey] = !isGeneralListMode
+            }
+            if (!primaryMangaPerGroup.containsKey(gKey)) {
+                primaryMangaPerGroup[gKey] = group.firstOrNull { it.source != MERGED_SOURCE_ID }?.id
                     ?: group.firstOrNull()?.id
                     ?: -1L
-                put(idx, defaultPrimary)
+            }
+            for (m in group) {
+                if (!mangaCheckedMap.containsKey(m.id)) {
+                    mangaCheckedMap[m.id] = true
+                }
             }
         }
     }
@@ -205,14 +227,14 @@ fun MangaIntegrationPreviewDialog(
     var chapterCounts by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
 
     // Fast single-query metadata load once scanning is finished
-    LaunchedEffect(activeGroups, isScanning) {
-        if (isScanning || activeGroups.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(allRawGroups, isScanning) {
+        if (isScanning || allRawGroups.isEmpty()) return@LaunchedEffect
         withIOContext {
             val libraryMap = getLibraryManga.await().associateBy { it.manga.id }
             val childrenMap = HashMap<Long, List<Manga>>()
             val counts = HashMap<Long, Int>()
 
-            for (group in activeGroups) {
+            for (group in allRawGroups) {
                 for (m in group) {
                     if (m.source == MERGED_SOURCE_ID) {
                         val children = getMergedMangaById.await(m.id).filter { it.source != MERGED_SOURCE_ID }
@@ -229,42 +251,74 @@ fun MangaIntegrationPreviewDialog(
     }
 
     var keepSingleBanner by remember { mutableStateOf(true) }
-    var isIntegrating by remember { mutableStateOf(false) }
+    var isIntegratingBatch by remember { mutableStateOf(false) }
+    var integratingSingleGroupKey by remember { mutableLongStateOf(-1L) }
     var mergeCurrentIndex by remember { mutableIntStateOf(0) }
     var mergeTotalCount by remember { mutableIntStateOf(0) }
     var mergeCurrentTitle by remember { mutableStateOf("") }
 
-    val validSelectedGroupIndices = activeGroups.indices.filter { groupIdx ->
-        groupCheckedMap[groupIdx] == true &&
-            activeGroups[groupIdx].count { mangaCheckedMap[it.id] == true } >= 2
+    val isBusyIntegrating = isIntegratingBatch || integratingSingleGroupKey != -1L
+
+    val validSelectedGroups = activeGroups.filter { group ->
+        val gKey = groupKeyOf(group)
+        groupCheckedMap[gKey] == true &&
+            group.count { mangaCheckedMap[it.id] == true } >= 2
     }
 
-    fun integrateGroupsList(groupIndicesToMerge: List<Int>) {
-        if (groupIndicesToMerge.isEmpty() || isIntegrating) return
-        val batchGroups = groupIndicesToMerge.mapNotNull { groupIdx ->
-            val group = activeGroups.getOrNull(groupIdx) ?: return@mapNotNull null
+    fun integrateGroups(groupsToMerge: List<List<Manga>>, isSingleCardAction: Boolean) {
+        if (groupsToMerge.isEmpty() || isBusyIntegrating) return
+        val batchGroups = groupsToMerge.mapNotNull { group ->
+            val gKey = groupKeyOf(group)
             val chosen = group.filter { mangaCheckedMap[it.id] == true }
             if (chosen.size < 2) return@mapNotNull null
-            val primaryId = primaryMangaPerGroup[groupIdx]?.takeIf { id ->
+            val primaryId = primaryMangaPerGroup[gKey]?.takeIf { id ->
                 chosen.any { it.id == id }
             } ?: chosen.firstOrNull { it.source != MERGED_SOURCE_ID }?.id
                 ?: chosen.first().id
 
-            SmartSearchMerge.BatchIntegrationGroup(
+            gKey to SmartSearchMerge.BatchIntegrationGroup(
                 mangasToMerge = chosen,
                 infoMangaId = primaryId,
             )
         }
         if (batchGroups.isEmpty()) return
 
-        isIntegrating = true
+        val remainingAfterMerge = activeGroups.count { group ->
+            val gKey = groupKeyOf(group)
+            batchGroups.none { it.first == gKey }
+        }
+
+        if (isSingleCardAction && batchGroups.size == 1 && remainingAfterMerge > 0) {
+            // Inline 1-by-1 integration without closing the list or losing scroll position!
+            val (targetKey, singleBatchGroup) = batchGroups.first()
+            integratingSingleGroupKey = targetKey
+            scope.launch {
+                val merged = withIOContext {
+                    smartSearchMerge.integrateMangas(
+                        mangasToMerge = singleBatchGroup.mangasToMerge,
+                        infoMangaId = singleBatchGroup.infoMangaId,
+                        hideChildrenFromLibrary = keepSingleBanner,
+                    )
+                }
+                integratingSingleGroupKey = -1L
+                if (merged != null) {
+                    integratedGroupKeys[targetKey] = true
+                    groupCheckedMap[targetKey] = false
+                    context.toast(SYMR.strings.entry_merged)
+                }
+            }
+            return
+        }
+
+        // Batch integration (or final remaining group)
+        isIntegratingBatch = true
         mergeTotalCount = batchGroups.size
         mergeCurrentIndex = 0
 
         scope.launch {
             val mergedResults = withIOContext {
                 smartSearchMerge.integrateMangaGroupsBatch(
-                    groups = batchGroups,
+                    groups = batchGroups.map { it.second },
                     hideChildrenFromLibrary = keepSingleBanner,
                     onProgress = { completed, total, title ->
                         mergeCurrentIndex = completed
@@ -273,15 +327,36 @@ fun MangaIntegrationPreviewDialog(
                     },
                 )
             }
-            isIntegrating = false
-            onDismissRequest()
-            if (mergedResults.size > 1 && onBatchIntegrated != null) {
-                onBatchIntegrated(mergedResults)
-            } else if (mergedResults.isNotEmpty()) {
-                if (onBatchIntegrated != null && activeGroups.size > 1) {
+            isIntegratingBatch = false
+
+            for ((gKey, _) in batchGroups) {
+                integratedGroupKeys[gKey] = true
+                groupCheckedMap[gKey] = false
+            }
+
+            if (remainingAfterMerge > 0 && isGeneralListMode) {
+                // Keep the dialog open so the user can continue integrating the remaining groups!
+                if (mergedResults.size == 1) {
+                    context.toast(SYMR.strings.entry_merged)
+                } else if (mergedResults.size > 1) {
+                    context.toast(
+                        context.stringResource(
+                            KMR.strings.manga_integration_batch_success,
+                            mergedResults.size,
+                        ),
+                    )
+                }
+            } else {
+                // All groups integrated (or single manual pair mode) -> close dialog
+                onDismissRequest()
+                if (mergedResults.size > 1 && onBatchIntegrated != null) {
                     onBatchIntegrated(mergedResults)
-                } else {
-                    onIntegrated(mergedResults.first())
+                } else if (mergedResults.isNotEmpty()) {
+                    if (onBatchIntegrated != null && isGeneralListMode) {
+                        onBatchIntegrated(mergedResults)
+                    } else {
+                        onIntegrated(mergedResults.first())
+                    }
                 }
             }
         }
@@ -293,14 +368,14 @@ fun MangaIntegrationPreviewDialog(
 
     AdaptiveSheet(
         onDismissRequest = {
-            if (!isIntegrating) {
+            if (!isBusyIntegrating) {
                 stopScanRequested = true
                 onDismissRequest()
             }
         },
     ) {
         // 1. PROCESSING / LOADING SCREEN (Scanning Library OR Integrating Multiple Groups)
-        if (isScanning || isIntegrating) {
+        if (isScanning || isIntegratingBatch) {
             Column(
                 modifier = Modifier
                     .padding(vertical = TabbedDialogPaddings.Vertical)
@@ -515,8 +590,8 @@ fun MangaIntegrationPreviewDialog(
             }
 
             // Multi-group Select All / Deselect All bar
-            if (activeGroups.size > 1) {
-                val allSelected = activeGroups.indices.all { groupCheckedMap[it] == true }
+            if (isGeneralListMode && activeGroups.isNotEmpty()) {
+                val allSelected = activeGroups.all { groupCheckedMap[groupKeyOf(it)] == true }
                 Row(
                     modifier = horizontalPaddingModifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -534,7 +609,7 @@ fun MangaIntegrationPreviewDialog(
                     TextButton(
                         onClick = {
                             val target = !allSelected
-                            activeGroups.indices.forEach { groupCheckedMap[it] = target }
+                            activeGroups.forEach { groupCheckedMap[groupKeyOf(it)] = target }
                         },
                     ) {
                         Text(
@@ -561,11 +636,13 @@ fun MangaIntegrationPreviewDialog(
             ) {
                 itemsIndexed(
                     items = activeGroups,
-                    key = { idx, group -> "${idx}_${group.firstOrNull()?.id ?: 0L}" },
+                    key = { _, group -> groupKeyOf(group) },
                 ) { groupIdx, groupMangas ->
-                    val isGroupChecked = groupCheckedMap[groupIdx] == true
+                    val gKey = groupKeyOf(groupMangas)
+                    val isGroupChecked = groupCheckedMap[gKey] == true
+                    val isThisCardIntegrating = integratingSingleGroupKey == gKey
                     val chosenInGroup = groupMangas.filter { mangaCheckedMap[it.id] == true }
-                    val primaryId = primaryMangaPerGroup[groupIdx]
+                    val primaryId = primaryMangaPerGroup[gKey]
                         ?: groupMangas.firstOrNull { it.source != MERGED_SOURCE_ID }?.id
                         ?: groupMangas.firstOrNull()?.id
                         ?: -1L
@@ -608,7 +685,7 @@ fun MangaIntegrationPreviewDialog(
                             modifier = Modifier.padding(MaterialTheme.padding.medium),
                             verticalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small),
                         ) {
-                            if (activeGroups.size > 1) {
+                            if (isGeneralListMode) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -618,11 +695,11 @@ fun MangaIntegrationPreviewDialog(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .weight(1f)
-                                            .clickable { groupCheckedMap[groupIdx] = !isGroupChecked },
+                                            .clickable { groupCheckedMap[gKey] = !isGroupChecked },
                                     ) {
                                         Checkbox(
                                             checked = isGroupChecked,
-                                            onCheckedChange = { groupCheckedMap[groupIdx] = it },
+                                            onCheckedChange = { groupCheckedMap[gKey] = it },
                                         )
                                         Text(
                                             text = stringResource(
@@ -634,11 +711,19 @@ fun MangaIntegrationPreviewDialog(
                                         )
                                     }
 
-                                    OutlinedButton(
-                                        onClick = { integrateGroupsList(listOf(groupIdx)) },
-                                        enabled = chosenInGroup.size >= 2 && !isIntegrating,
+                                    Button(
+                                        onClick = { integrateGroups(listOf(groupMangas), isSingleCardAction = true) },
+                                        enabled = chosenInGroup.size >= 2 && !isBusyIntegrating,
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                     ) {
+                                        if (isThisCardIntegrating) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.onPrimary,
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                        }
                                         Text(
                                             text = stringResource(KMR.strings.manga_integration_confirm_single_group),
                                             style = MaterialTheme.typography.labelMedium,
@@ -839,7 +924,7 @@ fun MangaIntegrationPreviewDialog(
                                             ) {
                                                 RadioButton(
                                                     selected = isPrimary,
-                                                    onClick = { primaryMangaPerGroup[groupIdx] = itemManga.id },
+                                                    onClick = { primaryMangaPerGroup[gKey] = itemManga.id },
                                                 )
                                                 Text(
                                                     text = stringResource(KMR.strings.manga_integration_primary_badge),
@@ -894,7 +979,7 @@ fun MangaIntegrationPreviewDialog(
             ) {
                 OutlinedButton(
                     onClick = onDismissRequest,
-                    enabled = !isIntegrating,
+                    enabled = !isBusyIntegrating,
                     modifier = Modifier
                         .heightIn(min = minHeight)
                         .weight(1f),
@@ -906,8 +991,8 @@ fun MangaIntegrationPreviewDialog(
                 }
 
                 Button(
-                    onClick = { integrateGroupsList(validSelectedGroupIndices) },
-                    enabled = validSelectedGroupIndices.isNotEmpty() && !isIntegrating,
+                    onClick = { integrateGroups(validSelectedGroups, isSingleCardAction = false) },
+                    enabled = validSelectedGroups.isNotEmpty() && !isBusyIntegrating,
                     modifier = Modifier
                         .heightIn(min = minHeight)
                         .weight(1.6f),
@@ -919,10 +1004,10 @@ fun MangaIntegrationPreviewDialog(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (activeGroups.size > 1) {
+                        text = if (isGeneralListMode) {
                             stringResource(
                                 KMR.strings.manga_integration_confirm_multiple,
-                                validSelectedGroupIndices.size,
+                                validSelectedGroups.size,
                             )
                         } else {
                             stringResource(KMR.strings.manga_integration_confirm)
@@ -940,7 +1025,7 @@ fun MangaIntegrationPreviewDialog(
                         onDismissRequest()
                         onAddSeparately()
                     },
-                    enabled = !isIntegrating,
+                    enabled = !isBusyIntegrating,
                     modifier = horizontalPaddingModifier
                         .heightIn(min = minHeight)
                         .fillMaxWidth(),
