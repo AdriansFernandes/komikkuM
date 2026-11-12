@@ -59,6 +59,7 @@ import eu.kanade.tachiyomi.data.sync.SyncDataJob
 import eu.kanade.tachiyomi.di.AppModule
 import eu.kanade.tachiyomi.di.PreferenceModule
 import eu.kanade.tachiyomi.di.SYPreferenceModule
+import eu.kanade.tachiyomi.extension.ExtensionManager
 import eu.kanade.tachiyomi.network.NetworkHelper
 import eu.kanade.tachiyomi.ui.base.delegate.SecureActivityDelegate
 import eu.kanade.tachiyomi.util.CrashLogUtil
@@ -84,11 +85,14 @@ import logcat.LogPriority
 import logcat.LogcatLogger
 import mihon.core.migration.Migrator
 import mihon.core.migration.migrations.migrations
+import mihon.domain.extension.model.DEFAULT_EXTENSION_STORES
+import mihon.domain.extension.repository.ExtensionStoreRepository
 import mihon.telemetry.TelemetryConfig
 import org.conscrypt.Conscrypt
 import tachiyomi.core.common.i18n.stringResource
 import tachiyomi.core.common.preference.Preference
 import tachiyomi.core.common.preference.PreferenceStore
+import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.core.common.util.system.ImageUtil
 import tachiyomi.core.common.util.system.logcat
 import tachiyomi.domain.storage.service.StorageManager
@@ -235,6 +239,28 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
         }
 
         initializeMigrator()
+
+        // KMK -->
+        scope.launchIO {
+            try {
+                val extensionStoreRepository = Injekt.get<ExtensionStoreRepository>()
+                val existingUrls = extensionStoreRepository.getAll().map { it.indexUrl }.toSet()
+                var addedNew = false
+                for (defaultStore in DEFAULT_EXTENSION_STORES) {
+                    if (defaultStore.indexUrl !in existingUrls) {
+                        extensionStoreRepository.upsertDefault(defaultStore)
+                        addedNew = true
+                    }
+                }
+                if (addedNew) {
+                    extensionStoreRepository.refreshAll()
+                    Injekt.get<ExtensionManager>().findAvailableExtensions()
+                }
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR, e) { "Failed to seed default extension stores" }
+            }
+        }
+        // KMK <--
     }
 
     private fun initializeMigrator() {

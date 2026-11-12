@@ -16,6 +16,7 @@ import eu.kanade.core.preference.asState
 import eu.kanade.core.util.fastFilterNot
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.chapter.interactor.SetReadStatus
+import eu.kanade.domain.manga.interactor.FindCrossLanguageMangaMatches
 import eu.kanade.domain.manga.interactor.SmartSearchMerge
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.source.service.SourcePreferences
@@ -90,6 +91,7 @@ import tachiyomi.core.common.util.lang.compareToWithCollator
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.core.common.util.lang.launchNonCancellable
 import tachiyomi.core.common.util.lang.withIOContext
+import tachiyomi.core.common.util.lang.withUIContext
 import tachiyomi.domain.category.interactor.GetCategories
 import tachiyomi.domain.category.interactor.SetMangaCategories
 import tachiyomi.domain.category.model.Category
@@ -161,6 +163,7 @@ class LibraryScreenModel(
     // SY <--
     // KMK -->
     private val smartSearchMerge: SmartSearchMerge = Injekt.get(),
+    private val findCrossLanguageMangaMatches: FindCrossLanguageMangaMatches = Injekt.get(),
     // KMK <--
 ) : StateScreenModel<LibraryScreenModel.State>(State()) {
 
@@ -1502,7 +1505,61 @@ class LibraryScreenModel(
         data object SyncFavoritesConfirm : Dialog
         data class RecommendationSearchSheet(val manga: List<Manga>) : Dialog
         // SY <--
+
+        // KMK -->
+        data class IntegrationPreview(
+            val mangas: List<Manga>,
+            val candidateGroups: List<List<Manga>> = emptyList(),
+        ) : Dialog
+        // KMK <--
     }
+
+    // KMK -->
+    fun openIntegrationPreviewDialog(
+        mangas: List<Manga>,
+        onNoMatchesForSingleManga: (Manga) -> Unit = {},
+    ) {
+        if (mangas.size >= 2) {
+            mutableState.update { it.copy(dialog = Dialog.IntegrationPreview(mangas)) }
+        } else if (mangas.size == 1) {
+            val single = mangas.first()
+            screenModelScope.launchIO {
+                val matches = findCrossLanguageMangaMatches(single)
+                if (matches.isNotEmpty()) {
+                    mutableState.update {
+                        it.copy(
+                            dialog = Dialog.IntegrationPreview(
+                                listOf(single) + matches.map { m -> m.manga },
+                            ),
+                        )
+                    }
+                } else {
+                    withUIContext {
+                        onNoMatchesForSingleManga(single)
+                    }
+                }
+            }
+        }
+    }
+
+    fun scanLibraryForLanguageIntegration(onEmpty: () -> Unit = {}) {
+        screenModelScope.launchIO {
+            val groups = findCrossLanguageMangaMatches.findLibraryIntegrationGroups()
+            if (groups.isNotEmpty()) {
+                mutableState.update {
+                    it.copy(
+                        dialog = Dialog.IntegrationPreview(
+                            mangas = groups.first(),
+                            candidateGroups = groups,
+                        ),
+                    )
+                }
+            } else {
+                withUIContext { onEmpty() }
+            }
+        }
+    }
+    // KMK <--
 
     // SY -->
     private fun List<LibraryItem>.getGroupedMangaItems(

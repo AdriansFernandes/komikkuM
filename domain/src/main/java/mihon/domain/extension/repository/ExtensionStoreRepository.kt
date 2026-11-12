@@ -9,6 +9,10 @@ interface ExtensionStoreRepository {
 
     suspend fun insertFromPreference(indexUrl: String, name: String)
 
+    // KMK -->
+    suspend fun upsertDefault(store: ExtensionStore)
+    // KMK <--
+
     suspend fun refreshAll()
 
     suspend fun fetchExtensions(

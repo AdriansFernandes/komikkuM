@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import mihon.domain.extension.model.DEFAULT_EXTENSION_STORES
+import mihon.domain.extension.repository.ExtensionStoreRepository
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.i18n.MR
 import tachiyomi.i18n.kmk.KMR
@@ -41,6 +43,9 @@ class ExtensionsScreenModel(
     basePreferences: BasePreferences = Injekt.get(),
     private val extensionManager: ExtensionManager = Injekt.get(),
     private val getExtensions: GetExtensionsByType = Injekt.get(),
+    // KMK -->
+    private val extensionStoreRepository: ExtensionStoreRepository = Injekt.get(),
+    // KMK <--
 ) : StateScreenModel<ExtensionsScreenModel.State>(State()) {
 
     private val currentDownloads = MutableStateFlow<Map<String, InstallStep>>(hashMapOf())
@@ -241,6 +246,15 @@ class ExtensionsScreenModel(
         screenModelScope.launchIO {
             mutableState.update { it.copy(isRefreshing = true) }
 
+            // KMK -->
+            val existingUrls = extensionStoreRepository.getAll().map { it.indexUrl }.toSet()
+            for (defaultStore in DEFAULT_EXTENSION_STORES) {
+                if (defaultStore.indexUrl !in existingUrls) {
+                    extensionStoreRepository.upsertDefault(defaultStore)
+                }
+            }
+            // KMK <--
+
             extensionManager.findAvailableExtensions()
 
             // Fake slower refresh so it doesn't seem like it's not doing anything
@@ -257,6 +271,15 @@ class ExtensionsScreenModel(
     }
 
     // KMK -->
+    fun trustAllExtensions() {
+        screenModelScope.launch {
+            state.value.items.values.flatten()
+                .map { it.extension }
+                .filterIsInstance<Extension.Untrusted>()
+                .forEach { extensionManager.trust(it) }
+        }
+    }
+
     fun toggleNsfwOnly() {
         mutableState.update {
             it.copy(nsfwOnly = !it.nsfwOnly)

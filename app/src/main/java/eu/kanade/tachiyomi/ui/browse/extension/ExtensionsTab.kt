@@ -56,6 +56,10 @@ fun extensionsTab(
                 title = stringResource(MR.strings.action_webview_refresh),
                 onClick = extensionsScreenModel::findAvailableExtensions,
             ),
+            AppBar.OverflowAction(
+                title = stringResource(KMR.strings.ext_trust_all),
+                onClick = extensionsScreenModel::trustAllExtensions,
+            ),
             // KMK <--
             AppBar.OverflowAction(
                 title = stringResource(MR.strings.action_filter),
@@ -102,6 +106,9 @@ fun extensionsTab(
                 onInstallExtension = extensionsScreenModel::installExtension,
                 onOpenExtension = { navigator.push(ExtensionDetailsScreen(it.pkgName)) },
                 onTrustExtension = { extensionsScreenModel.trustExtension(it) },
+                // KMK -->
+                onTrustAllExtensions = extensionsScreenModel::trustAllExtensions,
+                // KMK <--
                 onUninstallExtension = { extensionsScreenModel.uninstallExtension(it) },
                 onUpdateExtension = extensionsScreenModel::updateExtension,
                 onRefresh = extensionsScreenModel::findAvailableExtensions,

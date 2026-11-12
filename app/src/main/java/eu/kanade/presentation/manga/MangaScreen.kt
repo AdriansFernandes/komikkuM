@@ -3,9 +3,12 @@ package eu.kanade.presentation.manga
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
@@ -16,23 +19,33 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.FabPosition
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallExtendedFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableFloatState
@@ -59,6 +72,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastAll
 import androidx.compose.ui.util.fastAny
 import androidx.compose.ui.util.fastMap
@@ -99,6 +113,7 @@ import eu.kanade.tachiyomi.ui.manga.ChapterList
 import eu.kanade.tachiyomi.ui.manga.MangaScreenModel
 import eu.kanade.tachiyomi.ui.manga.MergedMangaData
 import eu.kanade.tachiyomi.ui.manga.PagePreviewState
+import eu.kanade.tachiyomi.util.system.LocaleHelper
 import eu.kanade.tachiyomi.util.system.copyToClipboard
 import exh.metadata.MetadataUtil
 import exh.source.MERGED_SOURCE_ID
@@ -124,7 +139,9 @@ import tachiyomi.presentation.core.components.material.PullRefresh
 import tachiyomi.presentation.core.components.material.Scaffold
 import tachiyomi.presentation.core.components.material.padding
 import tachiyomi.presentation.core.i18n.stringResource
+import tachiyomi.presentation.core.icons.FlagEmoji
 import tachiyomi.presentation.core.util.collectAsState
+import tachiyomi.presentation.core.util.secondaryItemAlpha
 import tachiyomi.presentation.core.util.shouldExpandFAB
 import tachiyomi.source.local.isLocal
 import uy.kohesive.injekt.Injekt
@@ -208,6 +225,7 @@ fun MangaScreen(
     coverRatio: MutableFloatState,
     onPaletteScreenClick: () -> Unit,
     hazeState: HazeState,
+    onSelectMergedManga: (Long?) -> Unit = {},
     // KMK <--
 ) {
     val context = LocalContext.current
@@ -277,6 +295,7 @@ fun MangaScreen(
             coverRatio = coverRatio,
             onPaletteScreenClick = onPaletteScreenClick,
             hazeState = hazeState,
+            onSelectMergedManga = onSelectMergedManga,
             // KMK <--
         )
     } else {
@@ -339,6 +358,7 @@ fun MangaScreen(
             coverRatio = coverRatio,
             onPaletteScreenClick = onPaletteScreenClick,
             hazeState = hazeState,
+            onSelectMergedManga = onSelectMergedManga,
             // KMK <--
         )
     }
@@ -418,6 +438,7 @@ private fun MangaScreenSmallImpl(
     coverRatio: MutableFloatState,
     onPaletteScreenClick: () -> Unit,
     hazeState: HazeState,
+    onSelectMergedManga: (Long?) -> Unit = {},
     // KMK <--
 ) {
     val chapterListState = rememberLazyListState()
@@ -473,7 +494,9 @@ private fun MangaScreenSmallImpl(
                 label = "Top Bar Background",
             )
             MangaToolbar(
-                title = state.manga.title,
+                // KMK -->
+                title = state.activeManga.title,
+                // KMK <--
                 hasFilters = state.filterActive,
                 navigateUp = navigateUp,
                 onClickFilter = onFilterClicked,
@@ -616,11 +639,17 @@ private fun MangaScreenSmallImpl(
                         MangaInfoBox(
                             isTabletUi = false,
                             appBarPadding = topPadding,
-                            manga = state.manga,
-                            sourceName = remember { state.source.getNameForMangaInfo(state.mergedData?.sources) },
-                            isStubSource = remember { state.source is StubSource },
                             // KMK -->
-                            isSourceIncognito = remember { state.source.isIncognitoModeEnabled() },
+                            manga = state.activeManga,
+                            sourceName = remember(state.activeSource, state.mergedData, state.effectiveSelectedChildMangaId) {
+                                if (state.effectiveSelectedChildMangaId != null) {
+                                    state.activeSource.getNameForMangaInfo(null)
+                                } else {
+                                    state.source.getNameForMangaInfo(state.mergedData?.sources)
+                                }
+                            },
+                            isStubSource = remember(state.activeSource) { state.activeSource is StubSource },
+                            isSourceIncognito = remember(state.activeSource) { state.activeSource.isIncognitoModeEnabled() },
                             // KMK <--
                             onCoverClick = onCoverClicked,
                             doSearch = onSearch,
@@ -652,11 +681,27 @@ private fun MangaScreenSmallImpl(
                             onMergeClicked = onMergeClicked.takeUnless { state.showMergeInOverflow },
                             // SY <--
                             // KMK -->
-                            status = state.manga.status,
+                            status = state.activeManga.status,
                             interval = state.manga.fetchInterval,
                             // KMK <--
                         )
                     }
+
+                    // KMK -->
+                    if (state.mergedChildMangas.isNotEmpty()) {
+                        item(
+                            key = MangaScreenItem.LANGUAGE_SELECTOR,
+                            contentType = MangaScreenItem.LANGUAGE_SELECTOR,
+                        ) {
+                            MergedLanguageSelectorBar(
+                                state = state,
+                                onSelectMergedManga = onSelectMergedManga,
+                                onAddLanguageClicked = onMergeClicked,
+                                onManageMergedClicked = onMergedSettingsClicked,
+                            )
+                        }
+                    }
+                    // KMK <--
 
                     // SY -->
                     if (metadataDescription != null) {
@@ -680,8 +725,10 @@ private fun MangaScreenSmallImpl(
                     ) {
                         ExpandableMangaDescription(
                             defaultExpandState = state.isFromSource && !state.manga.favorite,
-                            description = state.manga.description,
-                            tagsProvider = { state.manga.genre },
+                            // KMK -->
+                            description = state.activeManga.description ?: state.manga.description,
+                            tagsProvider = { state.activeManga.genre ?: state.manga.genre },
+                            // KMK <--
                             notes = state.manga.notes,
                             onTagSearch = onTagSearch,
                             onCopyTagToClipboard = onCopyTagToClipboard,
@@ -878,6 +925,7 @@ private fun MangaScreenLargeImpl(
     coverRatio: MutableFloatState,
     onPaletteScreenClick: () -> Unit,
     hazeState: HazeState,
+    onSelectMergedManga: (Long?) -> Unit = {},
     // KMK <--
 ) {
     val layoutDirection = LocalLayoutDirection.current
@@ -924,7 +972,9 @@ private fun MangaScreenLargeImpl(
             }
             MangaToolbar(
                 modifier = Modifier.onSizeChanged { topBarHeight = it.height },
-                title = state.manga.title,
+                // KMK -->
+                title = state.activeManga.title,
+                // KMK <--
                 hasFilters = state.filterActive,
                 navigateUp = navigateUp,
                 onClickFilter = onFilterButtonClicked,
@@ -1068,11 +1118,17 @@ private fun MangaScreenLargeImpl(
                         MangaInfoBox(
                             isTabletUi = true,
                             appBarPadding = contentPadding.calculateTopPadding(),
-                            manga = state.manga,
-                            sourceName = remember { state.source.getNameForMangaInfo(state.mergedData?.sources) },
-                            isStubSource = remember { state.source is StubSource },
                             // KMK -->
-                            isSourceIncognito = remember { state.source.isIncognitoModeEnabled() },
+                            manga = state.activeManga,
+                            sourceName = remember(state.activeSource, state.mergedData, state.effectiveSelectedChildMangaId) {
+                                if (state.effectiveSelectedChildMangaId != null) {
+                                    state.activeSource.getNameForMangaInfo(null)
+                                } else {
+                                    state.source.getNameForMangaInfo(state.mergedData?.sources)
+                                }
+                            },
+                            isStubSource = remember(state.activeSource) { state.activeSource is StubSource },
+                            isSourceIncognito = remember(state.activeSource) { state.activeSource.isIncognitoModeEnabled() },
                             // KMK <--
                             onCoverClick = onCoverClicked,
                             doSearch = onSearch,
@@ -1098,10 +1154,20 @@ private fun MangaScreenLargeImpl(
                             onMergeClicked = onMergeClicked.takeUnless { state.showMergeInOverflow },
                             // SY <--
                             // KMK -->
-                            status = state.manga.status,
+                            status = state.activeManga.status,
                             interval = state.manga.fetchInterval,
                             // KMK <--
                         )
+                        // KMK -->
+                        if (state.mergedChildMangas.isNotEmpty()) {
+                            MergedLanguageSelectorBar(
+                                state = state,
+                                onSelectMergedManga = onSelectMergedManga,
+                                onAddLanguageClicked = onMergeClicked,
+                                onManageMergedClicked = onMergedSettingsClicked,
+                            )
+                        }
+                        // KMK <--
                         // SY -->
                         metadataDescription?.invoke(
                             state,
@@ -1112,8 +1178,10 @@ private fun MangaScreenLargeImpl(
                         // SY <--
                         ExpandableMangaDescription(
                             defaultExpandState = true,
-                            description = state.manga.description,
-                            tagsProvider = { state.manga.genre },
+                            // KMK -->
+                            description = state.activeManga.description ?: state.manga.description,
+                            tagsProvider = { state.activeManga.genre ?: state.manga.genre },
+                            // KMK <--
                             notes = state.manga.notes,
                             onTagSearch = onTagSearch,
                             onCopyTagToClipboard = onCopyTagToClipboard,
@@ -1437,3 +1505,125 @@ fun metadataDescription(source: Source): MetadataDescriptionComposable? {
     }
 }
 // SY <--
+
+// KMK -->
+@Composable
+private fun MergedLanguageSelectorBar(
+    state: MangaScreenModel.State.Success,
+    onSelectMergedManga: (Long?) -> Unit,
+    onAddLanguageClicked: () -> Unit,
+    onManageMergedClicked: () -> Unit,
+) {
+    val childMangas = state.mergedChildMangas
+    val selectedChildId = state.effectiveSelectedChildMangaId
+    val chapterCountsByMangaId = remember(state.chapters) {
+        state.chapters.groupingBy { it.chapter.mangaId }.eachCount()
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = MaterialTheme.padding.medium, vertical = MaterialTheme.padding.extraSmall),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 2.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(
+                horizontal = MaterialTheme.padding.small,
+                vertical = MaterialTheme.padding.extraSmall,
+            ),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.extraSmall),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Translate,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = stringResource(KMR.strings.manga_language_selector_label, childMangas.size),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onAddLanguageClicked) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(KMR.strings.manga_language_selector_add),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    IconButton(
+                        onClick = onManageMergedClicked,
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small),
+                contentPadding = PaddingValues(bottom = MaterialTheme.padding.extraSmall),
+            ) {
+                items(
+                    items = childMangas,
+                    key = { it.id },
+                ) { childManga ->
+                    val childSource = state.mergedData?.sources?.find { it.id == childManga.source }
+                    val lang = childSource?.lang ?: "other"
+                    val flag = FlagEmoji.getEmojiLangFlag(lang)
+                    val langCode = LocaleHelper.getShortDisplayName(lang).uppercase().ifBlank { lang.uppercase() }
+                    val sourceLabel = childSource?.name.orEmpty()
+                    val count = chapterCountsByMangaId[childManga.id] ?: 0
+                    val isSelected = selectedChildId == childManga.id
+
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSelectMergedManga(childManga.id) },
+                        label = {
+                            Text(
+                                text = "$flag $langCode • $sourceLabel ($count)",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        },
+                    )
+                }
+
+                item(key = "merged-all-languages") {
+                    FilterChip(
+                        selected = selectedChildId == null,
+                        onClick = { onSelectMergedManga(-1L) },
+                        label = {
+                            Text(
+                                text = "🌐 ${stringResource(KMR.strings.manga_language_selector_all)} (${state.chapters.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+// KMK <--

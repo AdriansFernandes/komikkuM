@@ -238,4 +238,25 @@
     <string name="pref_discord_show_download_button_summary">Displays a button to download the app</string>
     <string name="pref_discord_show_discord_button">Show Discord Button</string>
     <string name="pref_discord_show_discord_button_summary">Displays a button to join the Discord server</string>
+    <!-- Multi-Language Manga Integration & Extensions -->
+    <string name="ext_trust_all">Aprovar todas as extensões (Approve All)</string>
+    <string name="manga_integration_preview_title">Pré-visualização de Integração de Idiomas</string>
+    <string name="manga_integration_preview_subtitle">Veja como os mangás selecionados serão unificados em um único banner na sua Biblioteca. Ao abrir a obra, você poderá alternar entre os idiomas (ex: PT-BR, EN-US) como se abrisse cada mangá individualmente.</string>
+    <string name="manga_integration_groups_found">%1$d grupos de obras correspondentes encontrados:</string>
+    <string name="manga_integration_banner_preview_label">Pré-visualização do Banner Único na Biblioteca</string>
+    <string name="manga_integration_available_languages">Idiomas integrados disponíveis ao abrir:</string>
+    <string name="manga_integration_entries_header">Selecione as obras e qual será a capa/título principal:</string>
+    <string name="manga_integration_chapters_count">%1$d capítulos</string>
+    <string name="manga_integration_primary_badge">Principal</string>
+    <string name="manga_integration_single_banner_option">Manter apenas um banner na biblioteca</string>
+    <string name="manga_integration_single_banner_summary">Oculta as entradas individuais da lista da biblioteca para que fique apenas uma obra integrada</string>
+    <string name="manga_integration_confirm">Confirmar Integração</string>
+    <string name="action_preview_manga_integration">Integrar Idiomas (Ver Pré-visualização)</string>
+    <string name="action_preview_manga_integration_subtitle">Juntar com a obra já existente na biblioteca em um único banner com seleção de idiomas</string>
+    <string name="action_integrate_library_languages">Integrar obras em múltiplos idiomas</string>
+    <string name="manga_integration_scanning_library">Buscando obras correspondentes na biblioteca...</string>
+    <string name="manga_integration_no_groups_found">Nenhum par encontrado automaticamente. Selecione os mangás manualmente e toque em Mesclar.</string>
+    <string name="manga_language_selector_label">Idiomas integrados (%1$d)</string>
+    <string name="manga_language_selector_add">Idioma</string>
+    <string name="manga_language_selector_all">Todos</string>
 </resources>

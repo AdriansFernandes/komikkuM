@@ -26,7 +26,9 @@ android {
     namespace = "eu.kanade.tachiyomi"
 
     defaultConfig {
-        applicationId = "app.komikku"
+        // KMK -->
+        applicationId = "app.komikku.m"
+        // KMK <--
 
         versionCode = 82
         versionName = "1.14.1"
@@ -49,6 +51,10 @@ android {
         val release by getting {
             isMinifyEnabled = Config.enableCodeShrink
             isShrinkResources = Config.enableCodeShrink
+
+            // KMK -->
+            signingConfig = debug.signingConfig
+            // KMK <--
 
             proguardFiles("proguard-android-optimize.txt", "proguard-rules.pro")
 

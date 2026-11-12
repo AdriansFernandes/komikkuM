@@ -3,19 +3,26 @@ package eu.kanade.domain.manga.interactor
 import android.app.Application
 import eu.kanade.domain.manga.model.copyFrom
 import eu.kanade.domain.manga.model.toSManga
+import eu.kanade.tachiyomi.source.online.all.MergedSource
 import exh.source.MERGED_SOURCE_ID
 import tachiyomi.core.common.i18n.stringResource
+import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.core.common.util.lang.withNonCancellableContext
 import tachiyomi.domain.category.interactor.GetCategories
 import tachiyomi.domain.category.interactor.SetMangaCategories
+import tachiyomi.domain.chapter.interactor.GetChaptersByMangaId
 import tachiyomi.domain.manga.interactor.DeleteByMergeId
 import tachiyomi.domain.manga.interactor.DeleteMangaById
 import tachiyomi.domain.manga.interactor.GetManga
 import tachiyomi.domain.manga.interactor.GetMergedReferencesById
 import tachiyomi.domain.manga.interactor.InsertMergedReference
 import tachiyomi.domain.manga.interactor.NetworkToLocalManga
+import tachiyomi.domain.manga.interactor.UpdateMergedSettings
 import tachiyomi.domain.manga.model.Manga
+import tachiyomi.domain.manga.model.MangaUpdate
+import tachiyomi.domain.manga.model.MergeMangaSettingsUpdate
 import tachiyomi.domain.manga.model.MergedMangaReference
+import tachiyomi.domain.source.service.SourceManager
 import tachiyomi.i18n.sy.SYMR
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -29,6 +36,12 @@ class SmartSearchMerge(
     private val deleteByMergeId: DeleteByMergeId = Injekt.get(),
     private val getCategories: GetCategories = Injekt.get(),
     private val setMangaCategories: SetMangaCategories = Injekt.get(),
+    // KMK -->
+    private val updateManga: UpdateManga = Injekt.get(),
+    private val updateMergedSettings: UpdateMergedSettings = Injekt.get(),
+    private val getChaptersByMangaId: GetChaptersByMangaId = Injekt.get(),
+    private val sourceManager: SourceManager = Injekt.get(),
+    // KMK <--
 ) {
     /**
      * @param originalMangaId ID of the existed merged entry or the original manga which will be used to create the new merged entry
@@ -177,4 +190,113 @@ class SmartSearchMerge(
 
         // Note that if the manga are merged in a different order, this won't trigger, but I don't care lol
     }
+
+    // KMK -->
+    /**
+     * Integrates multiple manga entries (e.g. PT-BR and EN-US versions) into a single unified
+     * [MERGED_SOURCE_ID] entry, optionally hiding individual child entries from the Library so
+     * only one banner remains in the user's Library list.
+     */
+    suspend fun integrateMangas(
+        mangasToMerge: List<Manga>,
+        infoMangaId: Long? = null,
+        hideChildrenFromLibrary: Boolean = true,
+    ): Manga? {
+        val distinctMangas = mangasToMerge.distinctBy { it.id }
+        if (distinctMangas.size <= 1) return distinctMangas.firstOrNull()
+
+        val existingMerged = distinctMangas.firstOrNull { it.source == MERGED_SOURCE_ID }
+        val nonMerged = distinctMangas.filterNot { it.source == MERGED_SOURCE_ID }
+            .sortedByDescending { it.id == infoMangaId }
+        val ordered = listOfNotNull(existingMerged) + nonMerged
+        if (ordered.size <= 1) return ordered.firstOrNull()
+
+        var mergedManga = ordered.first()
+        for (manga in ordered.drop(1)) {
+            mergedManga = smartSearchMerge(manga, mergedManga.id)
+        }
+
+        // Union all categories from all integrated mangas into the merged manga
+        val allCategoryIds = distinctMangas
+            .flatMap { getCategories.await(it.id) }
+            .map { it.id }
+            .distinct()
+        if (allCategoryIds.isNotEmpty()) {
+            setMangaCategories.await(mergedManga.id, allCategoryIds)
+        }
+
+        val references = getMergedReferencesById.await(mergedManga.id)
+        if (infoMangaId != null) {
+            val targetInfoManga = getManga.await(infoMangaId)
+            if (targetInfoManga != null && targetInfoManga.source != MERGED_SOURCE_ID) {
+                val settingsUpdates = references.map { ref ->
+                    MergeMangaSettingsUpdate(
+                        id = ref.id,
+                        isInfoManga = ref.mangaId == infoMangaId,
+                        getChapterUpdates = ref.getChapterUpdates,
+                        chapterPriority = ref.chapterPriority,
+                        downloadChapters = ref.downloadChapters,
+                        chapterSortMode = ref.chapterSortMode,
+                    )
+                }
+                updateMergedSettings.awaitAll(settingsUpdates)
+                updateManga.await(
+                    MangaUpdate(
+                        id = mergedManga.id,
+                        title = targetInfoManga.title,
+                        thumbnailUrl = targetInfoManga.thumbnailUrl,
+                        author = targetInfoManga.author,
+                        artist = targetInfoManga.artist,
+                        description = targetInfoManga.description,
+                        genre = targetInfoManga.genre,
+                        status = targetInfoManga.status,
+                        favorite = true,
+                    ),
+                )
+            }
+        }
+
+        if (hideChildrenFromLibrary) {
+            val childIds = references
+                .filter { it.mangaSourceId != MERGED_SOURCE_ID && it.mangaId != mergedManga.id }
+                .mapNotNull { it.mangaId }
+                .distinct()
+            if (childIds.isNotEmpty()) {
+                updateManga.awaitAll(
+                    childIds.map { childId ->
+                        MangaUpdate(
+                            id = childId,
+                            favorite = false,
+                        )
+                    },
+                )
+            }
+            updateManga.await(
+                MangaUpdate(
+                    id = mergedManga.id,
+                    favorite = true,
+                ),
+            )
+        }
+
+        val finalMerged = getManga.await(mergedManga.id) ?: mergedManga
+
+        // Ensure chapters are fetched in the background if any child manga has no chapters yet
+        launchIO {
+            try {
+                val childIds = references
+                    .filter { it.mangaSourceId != MERGED_SOURCE_ID && it.mangaId != finalMerged.id }
+                    .mapNotNull { it.mangaId }
+                val needsSync = childIds.any { getChaptersByMangaId.await(it).isEmpty() }
+                if (needsSync) {
+                    val mergedSource = sourceManager.get(MERGED_SOURCE_ID) as? MergedSource
+                    mergedSource?.fetchChaptersAndSync(finalMerged, downloadChapters = false)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        return finalMerged
+    }
+    // KMK <--
 }

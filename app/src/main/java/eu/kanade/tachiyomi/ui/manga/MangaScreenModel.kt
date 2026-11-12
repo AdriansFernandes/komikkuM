@@ -28,6 +28,7 @@ import eu.kanade.core.util.addOrRemove
 import eu.kanade.core.util.insertSeparators
 import eu.kanade.domain.chapter.interactor.GetAvailableScanlators
 import eu.kanade.domain.chapter.interactor.SetReadStatus
+import eu.kanade.domain.manga.interactor.FindCrossLanguageMangaMatches
 import eu.kanade.domain.manga.interactor.GetExcludedScanlators
 import eu.kanade.domain.manga.interactor.GetPagePreviews
 import eu.kanade.domain.manga.interactor.SetExcludedScanlators
@@ -231,6 +232,7 @@ class MangaScreenModel(
     private val insertLibraryUpdateErrors: InsertLibraryUpdateErrors = Injekt.get(),
     private val insertLibraryUpdateErrorMessages: InsertLibraryUpdateErrorMessages = Injekt.get(),
     private val deleteChaptersFromDb: DeleteChapters = Injekt.get(),
+    private val findCrossLanguageMangaMatches: FindCrossLanguageMangaMatches = Injekt.get(),
     // KMK <--
 ) : StateScreenModel<MangaScreenModel.State>(State.Loading) {
 
@@ -312,7 +314,9 @@ class MangaScreenModel(
             getMangaAndChapters.subscribe(mangaId, applyFilter = true).distinctUntilChanged()
                 // SY -->
                 .combine(
-                    getMergedChaptersByMangaId.subscribe(mangaId, true, applyFilter = true)
+                    // KMK -->
+                    getMergedChaptersByMangaId.subscribe(mangaId, false, applyFilter = true)
+                        // KMK <--
                         .distinctUntilChanged(),
                 ) { (manga, chapters), mergedChapters ->
                     if (manga.source == MERGED_SOURCE_ID) {
@@ -827,7 +831,9 @@ class MangaScreenModel(
                 // Add to library
                 // First, check if duplicate exists if callback is provided
                 if (checkDuplicate) {
-                    val duplicates = getDuplicateLibraryManga(manga)
+                    // KMK -->
+                    val duplicates = findCrossLanguageMangaMatches(manga)
+                    // KMK <--
 
                     if (duplicates.isNotEmpty()) {
                         updateSuccessState { it.copy(dialog = Dialog.DuplicateManga(manga, duplicates)) }
@@ -1251,7 +1257,9 @@ class MangaScreenModel(
      */
     fun getNextUnreadChapter(): Chapter? {
         val successState = successState ?: return null
-        return successState.chapters.getNextUnread(successState.manga)
+        // KMK -->
+        return successState.processedChapters.getNextUnread(successState.manga)
+        // KMK <--
     }
 
     private fun getUnreadChapters(): List<Chapter> {
@@ -1903,6 +1911,7 @@ class MangaScreenModel(
 
         // KMK -->
         data object ClearManga : Dialog
+        data class IntegrationPreview(val mangas: List<Manga>) : Dialog
         // KMK <--
 
         data object SettingsSheet : Dialog
@@ -1970,6 +1979,37 @@ class MangaScreenModel(
     fun showClearMangaDialog() {
         updateSuccessState { it.copy(dialog = Dialog.ClearManga) }
     }
+
+    fun selectMergedLanguageManga(childMangaId: Long?) {
+        updateSuccessState { it.copy(selectedMergedMangaId = childMangaId) }
+    }
+
+    fun showIntegrationPreviewDialog(otherMangaId: Long? = null, onNoMatchesFound: () -> Unit = {}) {
+        val currentManga = successState?.manga ?: return
+        screenModelScope.launchIO {
+            if (otherMangaId != null) {
+                val otherManga = getManga.await(otherMangaId)
+                if (otherManga != null) {
+                    updateSuccessState {
+                        it.copy(dialog = Dialog.IntegrationPreview(listOf(otherManga, currentManga)))
+                    }
+                    return@launchIO
+                }
+            }
+            val matches = findCrossLanguageMangaMatches(currentManga)
+            if (matches.isNotEmpty()) {
+                updateSuccessState {
+                    it.copy(
+                        dialog = Dialog.IntegrationPreview(
+                            listOf(currentManga) + matches.map { match -> match.manga },
+                        ),
+                    )
+                }
+            } else {
+                withUIContext { onNoMatchesFound() }
+            }
+        }
+    }
     // KMK <--
 
     sealed interface State {
@@ -2014,9 +2054,54 @@ class MangaScreenModel(
              */
             val relatedMangaCollection: List<RelatedManga>? = null,
             val seedColor: Color? = manga.asMangaCover().vibrantCoverColor?.let { Color(it) },
+            val selectedMergedMangaId: Long? = null,
             // KMK <--
         ) : State {
             // KMK -->
+            val mergedChildMangas: List<Manga> by lazy {
+                mergedData?.references
+                    ?.filter { it.mangaSourceId != MERGED_SOURCE_ID }
+                    ?.mapNotNull { ref -> mergedData.manga[ref.mangaId] }
+                    ?.distinctBy { it.id }
+                    .orEmpty()
+            }
+
+            /**
+             * Effective child manga ID when viewing a merged multi-language manga:
+             * - If [selectedMergedMangaId] == -1L, returns null ("All / Todos" view).
+             * - If [selectedMergedMangaId] is a valid child ID, returns that ID.
+             * - Otherwise defaults to the primary info manga (or first child manga) so opening the
+             *   integrated entry behaves like opening that individual language manga with a language selector bar.
+             */
+            val effectiveSelectedChildMangaId: Long? by lazy {
+                when {
+                    mergedChildMangas.isEmpty() -> null
+                    selectedMergedMangaId == -1L -> null
+                    selectedMergedMangaId != null && mergedChildMangas.any { it.id == selectedMergedMangaId } ->
+                        selectedMergedMangaId
+                    else -> {
+                        val infoRef = mergedData?.references?.firstOrNull {
+                            it.isInfoManga && it.mangaSourceId != MERGED_SOURCE_ID
+                        }
+                        infoRef?.mangaId?.takeIf { id -> mergedChildMangas.any { it.id == id } }
+                            ?: mergedChildMangas.first().id
+                    }
+                }
+            }
+
+            val activeManga: Manga by lazy {
+                effectiveSelectedChildMangaId?.let { id -> mergedChildMangas.find { it.id == id } } ?: manga
+            }
+
+            val activeSource: Source by lazy {
+                val child = effectiveSelectedChildMangaId?.let { id -> mergedChildMangas.find { it.id == id } }
+                if (child != null) {
+                    mergedData?.sources?.find { it.id == child.source } ?: source
+                } else {
+                    source
+                }
+            }
+
             /**
              * a value of null will be treated as still loading, so if all searching were failed and won't update
              * 'relatedMangaCollection` then we should return empty list
@@ -2030,8 +2115,14 @@ class MangaScreenModel(
             // KMK <--
 
             val processedChapters by lazy {
-                chapters.applyFilters(manga).toList()
-                    // KMK -->
+                // KMK -->
+                val activeChildId = effectiveSelectedChildMangaId
+                val baseChapters = if (activeChildId != null) {
+                    chapters.filter { it.chapter.mangaId == activeChildId }
+                } else {
+                    chapters
+                }
+                baseChapters.applyFilters(manga).toList()
                     // safe-guard some edge-cases where chapters are duplicated some how on a merged entry
                     .distinctBy { it.id }
                 // KMK <--

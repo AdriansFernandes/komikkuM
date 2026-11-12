@@ -35,6 +35,12 @@ class ExtensionStoreRepositoryImpl(
         }
     }
 
+    // KMK -->
+    override suspend fun upsertDefault(store: ExtensionStore) {
+        upsert(store)
+    }
+    // KMK <--
+
     override suspend fun refreshAll() {
         try {
             handler.awaitList {

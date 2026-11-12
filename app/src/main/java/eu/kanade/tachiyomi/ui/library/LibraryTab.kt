@@ -37,6 +37,7 @@ import eu.kanade.presentation.library.components.LibraryToolbar
 import eu.kanade.presentation.library.components.SyncFavoritesConfirmDialog
 import eu.kanade.presentation.library.components.SyncFavoritesProgressDialog
 import eu.kanade.presentation.library.components.SyncFavoritesWarningDialog
+import eu.kanade.presentation.manga.MangaIntegrationPreviewDialog
 import eu.kanade.presentation.manga.components.LibraryBottomActionMenu
 import eu.kanade.presentation.more.onboarding.GETTING_STARTED_URL
 import eu.kanade.presentation.util.Tab
@@ -189,6 +190,16 @@ data object LibraryTab : Tab {
                         Injekt.get<DownloadCache>().invalidateCache()
                         context.toast(MR.strings.download_cache_invalidated)
                     },
+                    // KMK -->
+                    onClickIntegrateLanguages = {
+                        context.toast(KMR.strings.manga_integration_scanning_library)
+                        screenModel.scanLibraryForLanguageIntegration(
+                            onEmpty = {
+                                context.toast(KMR.strings.manga_integration_no_groups_found)
+                            },
+                        )
+                    },
+                    // KMK <--
                     // For scroll overlay when no tab
                     scrollBehavior = scrollBehavior.takeIf { !state.showCategoryTabs },
                 )
@@ -220,38 +231,16 @@ data object LibraryTab : Tab {
                     },
                     // KMK -->
                     onMergeClicked = {
-                        if (state.selection.size == 1) {
-                            val manga = state.selectedManga.first()
-                            // Invoke merging for this manga
-                            screenModel.clearSelection()
-                            val smartSearchConfig = SourcesScreen.SmartSearchConfig(manga.title, manga.id)
-                            navigator.push(SourcesScreen(smartSearchConfig))
-                        } else if (state.selection.isNotEmpty()) {
-                            // Invoke multiple merge
-                            val selectedManga = state.selectedManga
-                            screenModel.clearSelection()
-                            scope.launchIO {
-                                val mergingMangas = selectedManga.filterNot { it.source == MERGED_SOURCE_ID }
-                                val mergedMangaId = screenModel.smartSearchMerge(selectedManga.toPersistentList())
-                                snackbarHostState.showSnackbar(context.stringResource(SYMR.strings.entry_merged))
-                                if (mergedMangaId != null) {
-                                    val result = snackbarHostState.showSnackbar(
-                                        message = context.stringResource(KMR.strings.action_remove_merged),
-                                        actionLabel = context.stringResource(MR.strings.action_remove),
-                                        withDismissAction = true,
-                                    )
-                                    if (result == SnackbarResult.ActionPerformed) {
-                                        screenModel.removeMangas(
-                                            mangas = mergingMangas,
-                                            deleteFromLibrary = true,
-                                            deleteChapters = false,
-                                        )
-                                    }
-                                    navigator.push(MangaScreen(mergedMangaId))
-                                } else {
-                                    snackbarHostState.showSnackbar(context.stringResource(SYMR.strings.merged_references_invalid))
-                                }
-                            }
+                        val selectedManga = state.selectedManga
+                        if (selectedManga.isNotEmpty()) {
+                            screenModel.openIntegrationPreviewDialog(
+                                mangas = selectedManga,
+                                onNoMatchesForSingleManga = { manga ->
+                                    screenModel.clearSelection()
+                                    val smartSearchConfig = SourcesScreen.SmartSearchConfig(manga.title, manga.id)
+                                    navigator.push(SourcesScreen(smartSearchConfig))
+                                },
+                            )
                         } else {
                             screenModel.clearSelection()
                             context.toast(SYMR.strings.no_valid_entry)
@@ -416,6 +405,20 @@ data object LibraryTab : Tab {
                 )
             }
             // SY <--
+            // KMK -->
+            is LibraryScreenModel.Dialog.IntegrationPreview -> {
+                MangaIntegrationPreviewDialog(
+                    mangas = dialog.mangas,
+                    candidateGroups = dialog.candidateGroups,
+                    onDismissRequest = onDismissRequest,
+                    onIntegrated = { mergedManga ->
+                        screenModel.clearSelection()
+                        context.toast(SYMR.strings.entry_merged)
+                        navigator.push(MangaScreen(mergedManga.id))
+                    },
+                )
+            }
+            // KMK <--
             null -> {}
         }
 

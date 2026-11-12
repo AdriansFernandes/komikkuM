@@ -86,6 +86,8 @@ object LocaleHelper {
      * Return the default languages enabled for the sources.
      */
     fun getDefaultEnabledLanguages(): Set<String> {
-        return setOf("all", "en", Locale.getDefault().language)
+        // KMK -->
+        return setOf("all", "en", "pt-BR", "pt", Locale.getDefault().language)
+        // KMK <--
     }
 }

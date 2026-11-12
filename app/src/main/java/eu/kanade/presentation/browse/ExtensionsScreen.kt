@@ -93,6 +93,9 @@ fun ExtensionScreen(
     onOpenExtension: (Extension.Installed) -> Unit,
     onClickUpdateAll: () -> Unit,
     onRefresh: () -> Unit,
+    // KMK -->
+    onTrustAllExtensions: () -> Unit = {},
+    // KMK <--
 ) {
     val navigator = LocalNavigator.currentOrThrow
 
@@ -134,6 +137,9 @@ fun ExtensionScreen(
                     onTrustExtension = onTrustExtension,
                     onOpenExtension = onOpenExtension,
                     onClickUpdateAll = onClickUpdateAll,
+                    // KMK -->
+                    onTrustAllExtensions = onTrustAllExtensions,
+                    // KMK <--
                 )
             }
         }
@@ -153,6 +159,9 @@ private fun ExtensionContent(
     onTrustExtension: (Extension.Untrusted) -> Unit,
     onOpenExtension: (Extension.Installed) -> Unit,
     onClickUpdateAll: () -> Unit,
+    // KMK -->
+    onTrustAllExtensions: () -> Unit = {},
+    // KMK <--
 ) {
     val context = LocalContext.current
     var trustState by remember { mutableStateOf<Extension.Untrusted?>(null) }
@@ -197,6 +206,22 @@ private fun ExtensionContent(
                                     }
                                 }
                                 // KMK -->
+                                MR.strings.ext_installed -> {
+                                    if (items.any { it.extension is Extension.Untrusted }) {
+                                        {
+                                            Button(onClick = { onTrustAllExtensions() }) {
+                                                Text(
+                                                    text = stringResource(KMR.strings.ext_trust_all),
+                                                    style = LocalTextStyle.current.copy(
+                                                        color = MaterialTheme.colorScheme.onPrimary,
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        {}
+                                    }
+                                }
                                 KMR.strings.extensions_page_more -> {
                                     {
                                         Button(onClick = { navigator?.push(ExtensionStoresScreen()) }) {

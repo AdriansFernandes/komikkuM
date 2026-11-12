@@ -9,6 +9,7 @@ import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
 import cafe.adriel.voyager.core.model.StateScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
+import eu.kanade.domain.manga.interactor.FindCrossLanguageMangaMatches
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.track.interactor.AddTracks
 import eu.kanade.presentation.components.BulkSelectionToolbar
@@ -57,6 +58,9 @@ class BulkFavoriteScreenModel(
     private val setMangaDefaultChapterFlags: SetMangaDefaultChapterFlags = Injekt.get(),
     private val addTracks: AddTracks = Injekt.get(),
     private val updateMangaFromRemote: UpdateMangaFromRemote = Injekt.get(),
+    // KMK -->
+    private val findCrossLanguageMangaMatches: FindCrossLanguageMangaMatches = Injekt.get(),
+    // KMK <--
 ) : StateScreenModel<BulkFavoriteScreenModel.State>(initialState) {
 
     fun backHandler() {
@@ -406,7 +410,9 @@ class BulkFavoriteScreenModel(
 
     fun addRemoveManga(manga: Manga, haptic: HapticFeedback? = null) {
         screenModelScope.launchIO {
-            val duplicates = getDuplicateLibraryManga(manga)
+            // KMK -->
+            val duplicates = findCrossLanguageMangaMatches(manga)
+            // KMK <--
             when {
                 manga.favorite -> setDialog(Dialog.RemoveManga(manga))
                 duplicates.isNotEmpty() -> setDialog(

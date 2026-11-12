@@ -23,6 +23,7 @@ import eu.kanade.presentation.components.AppBarActions
 import eu.kanade.presentation.components.SearchToolbar
 import kotlinx.collections.immutable.persistentListOf
 import tachiyomi.i18n.MR
+import tachiyomi.i18n.kmk.KMR
 import tachiyomi.i18n.sy.SYMR
 import tachiyomi.presentation.core.components.Pill
 import tachiyomi.presentation.core.i18n.stringResource
@@ -49,6 +50,9 @@ fun LibraryToolbar(
     onSearchQueryChange: (String?) -> Unit,
     scrollBehavior: TopAppBarScrollBehavior?,
     onInvalidateDownloadCache: (Context) -> Unit,
+    // KMK -->
+    onClickIntegrateLanguages: (() -> Unit)? = null,
+    // KMK <--
 ) = when {
     selectedCount > 0 -> LibrarySelectionToolbar(
         selectedCount = selectedCount,
@@ -72,6 +76,9 @@ fun LibraryToolbar(
         // SY <--
         scrollBehavior = scrollBehavior,
         onInvalidateDownloadCache = onInvalidateDownloadCache,
+        // KMK -->
+        onClickIntegrateLanguages = onClickIntegrateLanguages,
+        // KMK <--
     )
 }
 
@@ -92,6 +99,9 @@ private fun LibraryRegularToolbar(
     // SY <--
     scrollBehavior: TopAppBarScrollBehavior?,
     onInvalidateDownloadCache: (Context) -> Unit,
+    // KMK -->
+    onClickIntegrateLanguages: (() -> Unit)? = null,
+    // KMK <--
 ) {
     val context = LocalContext.current
     val pillAlpha = if (isSystemInDarkTheme()) 0.12f else 0.08f
@@ -162,6 +172,16 @@ private fun LibraryRegularToolbar(
                         )
                     }
                     // SY <--
+                    // KMK -->
+                    if (onClickIntegrateLanguages != null) {
+                        add(
+                            AppBar.OverflowAction(
+                                title = stringResource(KMR.strings.action_integrate_library_languages),
+                                onClick = onClickIntegrateLanguages,
+                            ),
+                        )
+                    }
+                    // KMK <--
                 }.build(),
             )
         },

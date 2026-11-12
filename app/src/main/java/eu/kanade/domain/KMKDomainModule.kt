@@ -1,5 +1,6 @@
 package eu.kanade.domain
 
+import eu.kanade.domain.manga.interactor.FindCrossLanguageMangaMatches
 import tachiyomi.data.libraryUpdateError.LibraryUpdateErrorRepositoryImpl
 import tachiyomi.data.libraryUpdateError.LibraryUpdateErrorWithRelationsRepositoryImpl
 import tachiyomi.data.libraryUpdateErrorMessage.LibraryUpdateErrorMessageRepositoryImpl
@@ -36,5 +37,9 @@ class KMKDomainModule : InjektModule {
         addFactory { GetLibraryUpdateErrors(get()) }
         addFactory { DeleteLibraryUpdateErrors(get()) }
         addFactory { InsertLibraryUpdateErrors(get()) }
+
+        // KMK -->
+        addFactory { FindCrossLanguageMangaMatches() }
+        // KMK <--
     }
 }
