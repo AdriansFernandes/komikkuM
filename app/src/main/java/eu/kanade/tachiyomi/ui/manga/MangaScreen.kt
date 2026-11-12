@@ -50,7 +50,6 @@ import eu.kanade.presentation.components.NavigatorAdaptiveSheet
 import eu.kanade.presentation.manga.ChapterSettingsDialog
 import eu.kanade.presentation.manga.DuplicateMangaDialog
 import eu.kanade.presentation.manga.EditCoverAction
-import eu.kanade.presentation.manga.MangaIntegrationPreviewDialog
 import eu.kanade.presentation.manga.MangaScreen
 import eu.kanade.presentation.manga.components.ClearMangaDialog
 import eu.kanade.presentation.manga.components.DeleteChaptersDialog
@@ -381,25 +380,10 @@ class MangaScreen(
                 openRecommends(navigator, screenModel.source?.getMainSource(), successState.manga)
             },
             onMergedSettingsClicked = screenModel::showEditMergedSettingsDialog,
-            // KMK -->
-            onMergeClicked = {
-                if (successState.manga.source == MERGED_SOURCE_ID) {
-                    openSmartSearch(navigator, successState.manga)
-                } else {
-                    screenModel.showIntegrationPreviewDialog(
-                        onNoMatchesFound = { openSmartSearch(navigator, successState.manga) },
-                    )
-                }
-            },
+            onMergeClicked = { openSmartSearch(navigator, successState.manga) },
             onMergeWithAnotherClicked = {
-                screenModel.showIntegrationPreviewDialog(
-                    otherMangaId = smartSearchConfig?.origMangaId,
-                    onNoMatchesFound = {
-                        mergeWithAnother(navigator, context, successState.manga, screenModel::smartSearchMerge)
-                    },
-                )
+                mergeWithAnother(navigator, context, successState.manga, screenModel::smartSearchMerge)
             },
-            // KMK <--
             onOpenPagePreview = { page ->
                 openPagePreview(context, successState.chapters.minByOrNull { it.chapter.sourceOrder }?.chapter, page)
             },
@@ -654,24 +638,6 @@ class MangaScreen(
                 ClearMangaDialog(
                     onDismissRequest = onDismissRequest,
                     onConfirm = screenModel::clearManga,
-                )
-            }
-            is MangaScreenModel.Dialog.IntegrationPreview -> {
-                MangaIntegrationPreviewDialog(
-                    mangas = dialog.mangas,
-                    onDismissRequest = onDismissRequest,
-                    onIntegrated = { mergedManga ->
-                        if (smartSearchConfig != null) {
-                            navigator.popUntil { it is SourcesScreen }
-                            navigator.pop()
-                        }
-                        if (navigator.lastItem !is MangaScreen) {
-                            navigator.push(MangaScreen(mergedManga.id))
-                        } else {
-                            navigator.replace(MangaScreen(mergedManga.id))
-                        }
-                        context.toast(SYMR.strings.entry_merged)
-                    },
                 )
             }
             // KMK <--

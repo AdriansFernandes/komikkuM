@@ -22,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.CallMerge
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.PersonOutline
 import androidx.compose.material.icons.filled.Warning
@@ -44,9 +43,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,25 +104,6 @@ fun DuplicateMangaDialog(
     val minHeight = LocalPreferenceMinHeight.current
     val horizontalPadding = PaddingValues(horizontal = TabbedDialogPaddings.Horizontal)
     val horizontalPaddingModifier = Modifier.padding(horizontalPadding)
-    // KMK -->
-    var showIntegrationPreview by remember { mutableStateOf(false) }
-
-    if (showIntegrationPreview) {
-        MangaIntegrationPreviewDialog(
-            mangas = listOf(targetManga) + duplicates.map { it.manga },
-            onDismissRequest = { showIntegrationPreview = false },
-            onIntegrated = { mergedManga ->
-                onDismissRequest()
-                onOpenManga(mergedManga)
-            },
-            onAddSeparately = {
-                onDismissRequest()
-                onConfirm()
-            },
-        )
-        return
-    }
-    // KMK <--
 
     AdaptiveSheet(
         modifier = modifier,
@@ -276,18 +254,6 @@ fun DuplicateMangaDialog(
                 // KMK <--
                 Column(modifier = horizontalPaddingModifier) {
                     HorizontalDivider()
-
-                    // KMK -->
-                    TextPreferenceWidget(
-                        title = stringResource(KMR.strings.action_preview_manga_integration),
-                        subtitle = stringResource(KMR.strings.action_preview_manga_integration_subtitle),
-                        icon = Icons.AutoMirrored.Outlined.CallMerge,
-                        onPreferenceClick = {
-                            showIntegrationPreview = true
-                        },
-                        modifier = Modifier.clip(CircleShape),
-                    )
-                    // KMK <--
 
                     TextPreferenceWidget(
                         title = stringResource(MR.strings.action_add_anyway),

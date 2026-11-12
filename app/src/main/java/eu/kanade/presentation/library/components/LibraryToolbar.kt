@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.FlipToBack
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -174,6 +175,14 @@ private fun LibraryRegularToolbar(
                     // SY <--
                     // KMK -->
                     if (onClickIntegrateLanguages != null) {
+                        add(
+                            0,
+                            AppBar.Action(
+                                title = stringResource(KMR.strings.action_integrate_library_languages),
+                                icon = Icons.Outlined.Translate,
+                                onClick = onClickIntegrateLanguages,
+                            ),
+                        )
                         add(
                             AppBar.OverflowAction(
                                 title = stringResource(KMR.strings.action_integrate_library_languages),

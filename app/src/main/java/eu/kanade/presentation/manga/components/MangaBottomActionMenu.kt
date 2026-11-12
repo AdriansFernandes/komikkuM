@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RemoveDone
 import androidx.compose.material.icons.outlined.SwapCalls
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -96,7 +97,7 @@ fun MangaBottomActionMenu(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             val haptic = LocalHapticFeedback.current
-            val confirm = remember { mutableStateListOf(false, false, false, false, false, false, false) }
+            val confirm = remember { mutableStateListOf(false, false, false, false, false, false, false, false) }
             var resetJob by remember { mutableStateOf<Job?>(null) }
             val onLongClickItem: (Int) -> Unit = { toConfirmIndex ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -267,6 +268,7 @@ fun LibraryBottomActionMenu(
     // KMK -->
     onMergeClicked: () -> Unit,
     onSelectionUpdateClicked: () -> Unit,
+    onIntegrateLanguagesClicked: (() -> Unit)? = null,
     // KMK <--
     // SY -->
     onClickCleanTitles: (() -> Unit)?,
@@ -288,7 +290,7 @@ fun LibraryBottomActionMenu(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             val haptic = LocalHapticFeedback.current
-            val confirm = remember { mutableStateListOf(false, false, false, false, false, false, false) }
+            val confirm = remember { mutableStateListOf(false, false, false, false, false, false, false, false) }
             var resetJob by remember { mutableStateOf<Job?>(null) }
             val onLongClickItem: (Int) -> Unit = { toConfirmIndex ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -369,6 +371,17 @@ fun LibraryBottomActionMenu(
                         onClick = onMigrateClicked,
                     )
                 }
+                // KMK -->
+                if (onIntegrateLanguagesClicked != null) {
+                    Button(
+                        title = stringResource(KMR.strings.action_integrate_selected_languages),
+                        icon = Icons.Outlined.Translate,
+                        toConfirm = confirm[7],
+                        onLongClick = { onLongClickItem(7) },
+                        onClick = onIntegrateLanguagesClicked,
+                    )
+                }
+                // KMK <--
                 var overflowMenuOpen by remember { mutableStateOf(false) }
                 Button(
                     title = stringResource(MR.strings.label_more),
@@ -401,6 +414,15 @@ fun LibraryBottomActionMenu(
                             onClick = onDeleteClicked,
                         )
                         // KMK -->
+                        if (onIntegrateLanguagesClicked != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(KMR.strings.action_integrate_selected_languages)) },
+                                onClick = {
+                                    overflowMenuOpen = false
+                                    onIntegrateLanguagesClicked()
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text(stringResource(SYMR.strings.merge)) },
                             onClick = onMergeClicked,

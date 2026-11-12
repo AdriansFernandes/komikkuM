@@ -1510,6 +1510,8 @@ class LibraryScreenModel(
         data class IntegrationPreview(
             val mangas: List<Manga>,
             val candidateGroups: List<List<Manga>> = emptyList(),
+            val scanLibrary: Boolean = false,
+            val onEmptyScanResult: (() -> Unit)? = null,
         ) : Dialog
         // KMK <--
     }
@@ -1519,44 +1521,30 @@ class LibraryScreenModel(
         mangas: List<Manga>,
         onNoMatchesForSingleManga: (Manga) -> Unit = {},
     ) {
-        if (mangas.size >= 2) {
-            mutableState.update { it.copy(dialog = Dialog.IntegrationPreview(mangas)) }
-        } else if (mangas.size == 1) {
-            val single = mangas.first()
-            screenModelScope.launchIO {
-                val matches = findCrossLanguageMangaMatches(single)
-                if (matches.isNotEmpty()) {
-                    mutableState.update {
-                        it.copy(
-                            dialog = Dialog.IntegrationPreview(
-                                listOf(single) + matches.map { m -> m.manga },
-                            ),
-                        )
-                    }
-                } else {
-                    withUIContext {
-                        onNoMatchesForSingleManga(single)
-                    }
-                }
-            }
+        if (mangas.isEmpty()) return
+        mutableState.update {
+            it.copy(
+                dialog = Dialog.IntegrationPreview(
+                    mangas = mangas,
+                    onEmptyScanResult = {
+                        if (mangas.size == 1) {
+                            onNoMatchesForSingleManga(mangas.first())
+                        }
+                    },
+                ),
+            )
         }
     }
 
     fun scanLibraryForLanguageIntegration(onEmpty: () -> Unit = {}) {
-        screenModelScope.launchIO {
-            val groups = findCrossLanguageMangaMatches.findLibraryIntegrationGroups()
-            if (groups.isNotEmpty()) {
-                mutableState.update {
-                    it.copy(
-                        dialog = Dialog.IntegrationPreview(
-                            mangas = groups.first(),
-                            candidateGroups = groups,
-                        ),
-                    )
-                }
-            } else {
-                withUIContext { onEmpty() }
-            }
+        mutableState.update {
+            it.copy(
+                dialog = Dialog.IntegrationPreview(
+                    mangas = emptyList(),
+                    scanLibrary = true,
+                    onEmptyScanResult = onEmpty,
+                ),
+            )
         }
     }
     // KMK <--

@@ -106,23 +106,32 @@ class FindCrossLanguageMangaMatches(
         }
 
     /**
-     * Scans the current library to find groups of mangas in different languages/sources that
-     * represent the same work and can be manually reviewed and integrated by the user.
+     * Scans the current library (or a provided list of [targetMangas]) to find groups of mangas
+     * in different languages/sources that represent the same work and can be reviewed and
+     * integrated by the user.
      */
-    suspend fun findLibraryIntegrationGroups(includeRemoteLookup: Boolean = true): List<List<Manga>> =
+    suspend fun findLibraryIntegrationGroups(
+        targetMangas: List<Manga>? = null,
+        includeRemoteLookup: Boolean = true,
+        shouldStop: () -> Boolean = { false },
+        onProgress: suspend (
+            processed: Int,
+            total: Int,
+            currentTitle: String,
+            liveGroups: List<List<Manga>>,
+        ) -> Unit = { _, _, _, _ -> },
+    ): List<List<Manga>> =
         withIOContext {
-            val libraryItems = getLibraryManga.await()
-            if (libraryItems.size < 2) return@withIOContext emptyList()
+            val mangasToScan = targetMangas?.distinctBy { it.id }
+                ?: getLibraryManga.await().map { it.manga }.distinctBy { it.id }
+            if (mangasToScan.size < 2) return@withIOContext emptyList()
 
-            val normTitlesPerManga = HashMap<Long, MutableSet<String>>()
-            val normAuthorPerManga = HashMap<Long, String>()
+            val total = mangasToScan.size
+            val normTitlesPerManga = ConcurrentHashMap<Long, MutableSet<String>>()
+            val normAuthorPerManga = ConcurrentHashMap<Long, String>()
 
-            for (item in libraryItems) {
-                val manga = item.manga
-                val localTitles = collectLocalTitles(manga).toMutableSet()
-                if (includeRemoteLookup && libraryItems.size <= 60) {
-                    localTitles.addAll(fetchRemoteSynonyms(manga.title))
-                }
+            for (manga in mangasToScan) {
+                val localTitles = collectLocalTitles(manga)
                 normTitlesPerManga[manga.id] = localTitles
                     .map { normalizeTitle(it) }
                     .filter { it.length >= 2 }
@@ -130,39 +139,71 @@ class FindCrossLanguageMangaMatches(
                 normAuthorPerManga[manga.id] = manga.author?.let { normalizeAuthor(it) }.orEmpty()
             }
 
-            val visited = HashSet<Long>()
-            val groups = mutableListOf<List<Manga>>()
+            fun computeGroups(): List<List<Manga>> {
+                val visited = HashSet<Long>()
+                val groups = mutableListOf<List<Manga>>()
 
-            for (i in libraryItems.indices) {
-                val base = libraryItems[i].manga
-                if (!visited.add(base.id)) continue
+                for (i in mangasToScan.indices) {
+                    val base = mangasToScan[i]
+                    if (!visited.add(base.id)) continue
 
-                val baseTitles = normTitlesPerManga[base.id].orEmpty()
-                val baseAuthor = normAuthorPerManga[base.id].orEmpty()
-                val currentGroup = mutableListOf(base)
+                    val baseTitles = normTitlesPerManga[base.id]?.toSet().orEmpty()
+                    val baseAuthor = normAuthorPerManga[base.id].orEmpty()
+                    val currentGroup = mutableListOf(base)
 
-                for (j in i + 1 until libraryItems.size) {
-                    val other = libraryItems[j].manga
-                    if (other.id in visited) continue
+                    for (j in i + 1 until mangasToScan.size) {
+                        val other = mangasToScan[j]
+                        if (other.id in visited) continue
 
-                    val otherTitles = normTitlesPerManga[other.id].orEmpty()
-                    val otherAuthor = normAuthorPerManga[other.id].orEmpty()
-                    val sameAuthor = baseAuthor.length >= 4 &&
-                        otherAuthor.length >= 4 &&
-                        (baseAuthor.contains(otherAuthor) || otherAuthor.contains(baseAuthor))
+                        val otherTitles = normTitlesPerManga[other.id]?.toSet().orEmpty()
+                        val otherAuthor = normAuthorPerManga[other.id].orEmpty()
+                        val sameAuthor = baseAuthor.length >= 4 &&
+                            otherAuthor.length >= 4 &&
+                            (baseAuthor.contains(otherAuthor) || otherAuthor.contains(baseAuthor))
 
-                    if (areTitleSetsMatching(baseTitles, otherTitles, sameAuthor)) {
-                        visited.add(other.id)
-                        currentGroup.add(other)
+                        if (areTitleSetsMatching(baseTitles, otherTitles, sameAuthor)) {
+                            visited.add(other.id)
+                            currentGroup.add(other)
+                        }
+                    }
+
+                    if (currentGroup.size >= 2) {
+                        groups.add(currentGroup)
                     }
                 }
+                return groups
+            }
 
-                if (currentGroup.size >= 2) {
-                    groups.add(currentGroup)
+            var currentGroups = computeGroups()
+            onProgress(0, total, mangasToScan.first().title, currentGroups)
+
+            if (includeRemoteLookup) {
+                var processedCount = 0
+                for (chunk in mangasToScan.chunked(4)) {
+                    if (shouldStop()) break
+                    coroutineScope {
+                        chunk.map { manga ->
+                            async {
+                                if (shouldStop()) return@async
+                                val remote = fetchRemoteSynonyms(manga.title)
+                                val targetSet = normTitlesPerManga[manga.id]
+                                if (targetSet != null && remote.isNotEmpty()) {
+                                    synchronized(targetSet) {
+                                        remote.map { normalizeTitle(it) }
+                                            .filter { it.length >= 2 }
+                                            .forEach { targetSet.add(it) }
+                                    }
+                                }
+                            }
+                        }.forEach { it.await() }
+                    }
+                    processedCount = (processedCount + chunk.size).coerceAtMost(total)
+                    currentGroups = computeGroups()
+                    onProgress(processedCount, total, chunk.last().title, currentGroups)
                 }
             }
 
-            groups
+            currentGroups
         }
 
     private suspend fun collectLocalTitles(manga: Manga): Set<String> {

@@ -16,7 +16,6 @@ import cafe.adriel.voyager.core.model.StateScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import dev.icerock.moko.resources.StringResource
 import eu.kanade.core.preference.asState
-import eu.kanade.domain.manga.interactor.FindCrossLanguageMangaMatches
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.source.interactor.GetExhSavedSearch
 import eu.kanade.domain.source.interactor.GetIncognitoState
@@ -114,8 +113,6 @@ open class BrowseSourceScreenModel(
     getIncognitoState: GetIncognitoState = Injekt.get(),
     // KMK -->
     private val updateMangaFromRemote: UpdateMangaFromRemote = Injekt.get(),
-    private val findCrossLanguageMangaMatches: FindCrossLanguageMangaMatches = Injekt.get(),
-    // KMK <--
     private val toggleIncognito: ToggleIncognito = Injekt.get(),
     private val extensionManager: ExtensionManager = Injekt.get(),
     // KMK <--
@@ -460,9 +457,7 @@ open class BrowseSourceScreenModel(
     }
 
     suspend fun getDuplicateLibraryManga(manga: Manga): List<MangaWithChapterCount> {
-        // KMK -->
-        return findCrossLanguageMangaMatches.invoke(manga)
-        // KMK <--
+        return getDuplicateLibraryManga.invoke(manga)
     }
 
     private fun moveMangaToCategories(manga: Manga, vararg categories: Category) {

@@ -28,7 +28,6 @@ import eu.kanade.core.util.addOrRemove
 import eu.kanade.core.util.insertSeparators
 import eu.kanade.domain.chapter.interactor.GetAvailableScanlators
 import eu.kanade.domain.chapter.interactor.SetReadStatus
-import eu.kanade.domain.manga.interactor.FindCrossLanguageMangaMatches
 import eu.kanade.domain.manga.interactor.GetExcludedScanlators
 import eu.kanade.domain.manga.interactor.GetPagePreviews
 import eu.kanade.domain.manga.interactor.SetExcludedScanlators
@@ -232,7 +231,6 @@ class MangaScreenModel(
     private val insertLibraryUpdateErrors: InsertLibraryUpdateErrors = Injekt.get(),
     private val insertLibraryUpdateErrorMessages: InsertLibraryUpdateErrorMessages = Injekt.get(),
     private val deleteChaptersFromDb: DeleteChapters = Injekt.get(),
-    private val findCrossLanguageMangaMatches: FindCrossLanguageMangaMatches = Injekt.get(),
     // KMK <--
 ) : StateScreenModel<MangaScreenModel.State>(State.Loading) {
 
@@ -831,9 +829,7 @@ class MangaScreenModel(
                 // Add to library
                 // First, check if duplicate exists if callback is provided
                 if (checkDuplicate) {
-                    // KMK -->
-                    val duplicates = findCrossLanguageMangaMatches(manga)
-                    // KMK <--
+                    val duplicates = getDuplicateLibraryManga(manga)
 
                     if (duplicates.isNotEmpty()) {
                         updateSuccessState { it.copy(dialog = Dialog.DuplicateManga(manga, duplicates)) }
@@ -1911,7 +1907,6 @@ class MangaScreenModel(
 
         // KMK -->
         data object ClearManga : Dialog
-        data class IntegrationPreview(val mangas: List<Manga>) : Dialog
         // KMK <--
 
         data object SettingsSheet : Dialog
@@ -1982,33 +1977,6 @@ class MangaScreenModel(
 
     fun selectMergedLanguageManga(childMangaId: Long?) {
         updateSuccessState { it.copy(selectedMergedMangaId = childMangaId) }
-    }
-
-    fun showIntegrationPreviewDialog(otherMangaId: Long? = null, onNoMatchesFound: () -> Unit = {}) {
-        val currentManga = successState?.manga ?: return
-        screenModelScope.launchIO {
-            if (otherMangaId != null) {
-                val otherManga = getManga.await(otherMangaId)
-                if (otherManga != null) {
-                    updateSuccessState {
-                        it.copy(dialog = Dialog.IntegrationPreview(listOf(otherManga, currentManga)))
-                    }
-                    return@launchIO
-                }
-            }
-            val matches = findCrossLanguageMangaMatches(currentManga)
-            if (matches.isNotEmpty()) {
-                updateSuccessState {
-                    it.copy(
-                        dialog = Dialog.IntegrationPreview(
-                            listOf(currentManga) + matches.map { match -> match.manga },
-                        ),
-                    )
-                }
-            } else {
-                withUIContext { onNoMatchesFound() }
-            }
-        }
     }
     // KMK <--
 
